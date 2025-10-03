@@ -877,4 +877,57 @@ def run_telecalling_agent(customer_id: str, phone_number: str):
         "identity_verified": False,
         "current_question": "",
         "current_category": "",
-        "questions
+        "questions_asked": [],
+        "questions_remaining": [],
+        "retry_count": 0,
+        "last_response_type": ResponseType.CLEAR,  # Default initial value
+        "audio_quality": "unknown",
+        "needs_clarification": False,
+        "credit_score": {},
+        "final_report": {},
+        "error_type": None,
+        "handoff_reason": None,
+    }
+
+    # Create and compile the graph
+    app = create_telecalling_graph()
+
+    # Stream events and print updates
+    # Note: In a real-world scenario, the graph would be paused at each 'listen' step,
+    # waiting for an external event (like a Twilio webhook with user's speech).
+    # Here, 'listen_for_response' is mocked, so the graph runs to completion.
+    final_state = None
+    logger.info("--- Starting Graph Execution ---")
+    for event in app.stream(initial_state):
+        node_name = list(event.keys())[0]
+        logger.info(f"--- Executing Node: {node_name} ---")
+        if "__end__" in event:
+            final_state = event["__end__"]
+            break
+        
+    if final_state:
+        logger.info("\n" + "=" * 60)
+        logger.info("AGENT EXECUTION FINISHED")
+        logger.info("=" * 60)
+        
+        # Print final report
+        final_report = final_state.get("final_report", {})
+        if final_report:
+            logger.info("Final Report:")
+            print(json.dumps(final_report, indent=2))
+        else:
+            logger.warning("No final report was generated.")
+    else:
+        logger.error("Agent execution failed to complete.")
+
+
+if __name__ == "__main__":
+    # Example customer ID and phone number
+    CUSTOMER_ID = "CUST12345"
+    PHONE_NUMBER = "+919999988888"
+    
+    # Run the agent for the specified customer
+    run_telecalling_agent(
+        customer_id=CUSTOMER_ID,
+        phone_number=PHONE_NUMBER
+    )
