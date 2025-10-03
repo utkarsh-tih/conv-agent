@@ -10,8 +10,8 @@ from langgraph.graph import StateGraph, END
 from langgraph.prebuilt import ToolNode
 from langchain_core.tools import tool
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
-from langchain_community.chat_models import ChatOllama
-from langchain_openai import ChatOpenAI
+from langchain_ollama import ChatOllama
+# from langchain_openai import ChatOpenAI
 import operator
 import json
 from datetime import datetime
@@ -22,8 +22,8 @@ import whisper
 import wave
 import time
 from sqlalchemy import create_engine, Column, String, JSON, DateTime, Text, insert
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import sessionmaker, declarative_base
+#from sqlalchemy.ext.declarative import declarative_base
 
 # ============= DATABASE SETUP (SQLAlchemy) =============
 DATABASE_URL = "postgresql://telecall_user:secure_password@localhost/telecalling_db"
