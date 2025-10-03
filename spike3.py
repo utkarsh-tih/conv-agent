@@ -6,7 +6,7 @@ Simplified version for testing core logic without audio/Twilio
 from typing import TypedDict, Literal
 from langgraph.graph import StateGraph, END, START
 from langchain_core.messages import BaseMessage, HumanMessage, AIMessage, SystemMessage
-from langchain_community.chat_models import ChatOllama
+from langchain_ollama import ChatOllama
 import json
 from datetime import datetime
 import logging
@@ -99,7 +99,7 @@ class AgentState(TypedDict):
 
 # ============= LLM INITIALIZATION =============
 
-def initialize_llm(model: str = "llama3.1:8b"):
+def initialize_llm(model: str = "llama3.2"):
     """Initialize local LLM"""
     return ChatOllama(
         model=model,
@@ -717,6 +717,7 @@ def create_telecalling_graph():
     workflow.add_node("qa", dynamic_qa_node)
     workflow.add_node("repeat", repeat_question_node)
     workflow.add_node("redirect", redirect_to_question_node)
+    workflow.add_node("check_more", check_more_questions)
     workflow.add_node("handoff", human_handoff_node)
     workflow.add_node("scoring", credit_scoring_node)
     workflow.add_node("generate_report", generate_report_node)
@@ -826,6 +827,6 @@ def run_text_telecalling_agent(customer_id: str = "CUST001"):
 
 if __name__ == "__main__":
     print("\n🚀 Starting Text-Based Telecalling Agent...")
-    print("Make sure Ollama is running with llama3.1:8b model\n")
+    print("Make sure Ollama is running with llama3.2 model\n")
     
     run_text_telecalling_agent("CUST001")

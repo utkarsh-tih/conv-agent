@@ -1,0 +1,47 @@
+# General
+*.log
+*.tmp
+*.bak
+*.swp
+*~
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+/bin/
+/build/
+/dist/
+/out/
+
+# Dependency directories
+/node_modules/
+/vendor/
+
+# IDE and editor files
+.idea/
+*.sublime-project
+*.sublime-workspace
+.vscode/
+*.code-workspace
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# System files
+*.DS_Store
+Thumbs.db
+
+# Miscellaneous
+*.cache
+*.lock
+coverage/
+*.coverage
+*.pyc
+__pycache__/
+*.egg-info/
+
+# Virtual Environments
+/.venv
+.venv
