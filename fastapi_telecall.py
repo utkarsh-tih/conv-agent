@@ -20,7 +20,7 @@ from spike8_questionnaire_textmode_fastapi import (
     get_loan_applicant_data,
     save_loan_verification,
     generate_verification_report,
-    list_recent_verifications as db_list_recent
+    list_recent_verifications as db_list_recent,
 )
 from langchain_core.messages import HumanMessage, AIMessage
 
@@ -50,10 +50,11 @@ class SessionResponse(BaseModel):
 
 # ============= MODIFIED AGENT FOR API =============
 
+
 def create_api_session(customer_id: str, language: str = "english") -> tuple[str, dict]:
     """Create a new verification session"""
     session_id = f"session_{uuid.uuid4().hex[:12]}"
-    
+
     initial_state = {
         "messages": [],
         "applicant_data": {},
@@ -75,77 +76,84 @@ def create_api_session(customer_id: str, language: str = "english") -> tuple[str
         "customer_id": customer_id,
         "pending_action": None,  # Track what agent is waiting for
     }
-    
+
     # Fetch applicant data immediately
     applicant_data = get_loan_applicant_data.invoke({"customer_id": customer_id})
     initial_state["applicant_data"] = applicant_data
-    
+
     active_sessions[session_id] = {
         "state": initial_state,
         "graph": create_graph(),
         "last_activity": datetime.now(),
         "agent_message_queue": [],
     }
-    
+
     return session_id, initial_state
 
 
 def process_agent_turn(session_id: str, user_message: Optional[str] = None) -> dict:
     """Process one turn of the agent conversation"""
-    
+
     if session_id not in active_sessions:
         raise HTTPException(status_code=404, detail="Session not found")
-    
+
     session = active_sessions[session_id]
     state = session["state"]
     graph = session["graph"]
-    
+
     # Add user message if provided
     if user_message:
         state["messages"].append(HumanMessage(content=user_message))
-        state["transcript"].append({
-            "speaker": "customer",
-            "text": user_message,
-            "timestamp": datetime.now().isoformat(),
-            "mode": "text"
-        })
-    
+        state["transcript"].append(
+            {
+                "speaker": "customer",
+                "text": user_message,
+                "timestamp": datetime.now().isoformat(),
+                "mode": "text",
+            }
+        )
+
     # Run one iteration of the graph
     # We need to capture agent outputs without blocking
     try:
         # Invoke the graph with current state
         new_state = graph.invoke(state)
         session["state"] = new_state
-        
+
         # Extract agent's last message
         agent_message = None
         for msg in reversed(new_state["messages"]):
             if isinstance(msg, AIMessage):
                 # Check if it's a tool call or actual text
-                if hasattr(msg, 'content') and msg.content and not hasattr(msg, 'tool_calls'):
+                if (
+                    hasattr(msg, "content")
+                    and msg.content
+                    and not hasattr(msg, "tool_calls")
+                ):
                     agent_message = msg.content
                     break
-        
+
         # Check transcript for agent speech
         if not agent_message and new_state["transcript"]:
             for entry in reversed(new_state["transcript"]):
                 if entry.get("speaker") == "agent":
                     agent_message = entry.get("text")
                     break
-        
+
         return {
             "agent_message": agent_message,
             "stage": new_state["stage"],
             "awaiting_input": new_state["stage"] not in ["end", "closing"],
             "state": new_state,
         }
-    
+
     except Exception as e:
         print(f"Error processing agent turn: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
 # ============= API ENDPOINTS =============
+
 
 @app.get("/", response_class=HTMLResponse)
 async def root():
@@ -385,16 +393,17 @@ async def start_call(request: StartCallRequest):
     """Initialize a new verification call session"""
     try:
         session_id, initial_state = create_api_session(
-            request.customer_id, 
-            request.language
+            request.customer_id, request.language
         )
-        
+
         return {
             "session_id": session_id,
             "status": "started",
             "customer_id": request.customer_id,
             "applicant_name": initial_state["applicant_data"].get("name"),
-            "application_number": initial_state["applicant_data"].get("application_number"),
+            "application_number": initial_state["applicant_data"].get(
+                "application_number"
+            ),
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -405,7 +414,7 @@ async def get_agent_message(session_id: str):
     """Get the initial agent greeting"""
     try:
         result = process_agent_turn(session_id, None)
-        
+
         return {
             "session_id": session_id,
             "agent_message": result["agent_message"],
@@ -421,7 +430,7 @@ async def send_message(request: SendMessageRequest):
     """Send customer message and get agent response"""
     try:
         result = process_agent_turn(request.session_id, request.message)
-        
+
         return {
             "session_id": request.session_id,
             "status": "success",
@@ -438,38 +447,45 @@ async def end_call(session_id: str):
     """End the call and save data"""
     if session_id not in active_sessions:
         raise HTTPException(status_code=404, detail="Session not found")
-    
+
     session = active_sessions[session_id]
     state = session["state"]
-    
+
     # Determine verification status
-    if state.get('identity_verified') and len(state.get('questions_completed', [])) >= 19:
+    if (
+        state.get("identity_verified")
+        and len(state.get("questions_completed", [])) >= 19
+    ):
         verification_status = "completed"
-    elif state.get('identity_verified') and len(state.get('questions_completed', [])) > 0:
+    elif (
+        state.get("identity_verified") and len(state.get("questions_completed", [])) > 0
+    ):
         verification_status = "partial"
     else:
         verification_status = "failed"
-    
+
     # Save to database
-    save_result = save_loan_verification.invoke({
-        "call_sid": state['call_sid'],
-        "customer_id": state.get('customer_id', 'unknown'),
-        "transcript": state['transcript'],
-        "verification_data": state['verification_data'],
-        "audio_paths": state['audio_paths'],
-        "identity_verified": state.get('identity_verified', False),
-        "consent_given": state.get('consent_given', False),
-        "verification_status": verification_status
-    })
-    
+    save_result = save_loan_verification.invoke(
+        {
+            "call_sid": state["call_sid"],
+            "customer_id": state.get("customer_id", "unknown"),
+            "transcript": state["transcript"],
+            "verification_data": state["verification_data"],
+            "audio_paths": state["audio_paths"],
+            "identity_verified": state.get("identity_verified", False),
+            "consent_given": state.get("consent_given", False),
+            "verification_status": verification_status,
+        }
+    )
+
     # Clean up session
     del active_sessions[session_id]
-    
+
     return {
         "session_id": session_id,
         "status": "ended",
         "verification_status": verification_status,
-        "save_status": save_result.get('status'),
+        "save_status": save_result.get("status"),
     }
 
 
@@ -478,10 +494,10 @@ async def get_session(session_id: str):
     """Get current session state"""
     if session_id not in active_sessions:
         raise HTTPException(status_code=404, detail="Session not found")
-    
+
     session = active_sessions[session_id]
     state = session["state"]
-    
+
     return {
         "session_id": session_id,
         "stage": state["stage"],
@@ -501,7 +517,7 @@ async def list_calls(limit: int = 10):
         # For now, return active sessions
         return {
             "active_sessions": len(active_sessions),
-            "session_ids": list(active_sessions.keys())
+            "session_ids": list(active_sessions.keys()),
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -509,4 +525,5 @@ async def list_calls(limit: int = 10):
 
 if __name__ == "__main__":
     import uvicorn
+
     uvicorn.run(app, host="0.0.0.0", port=8000)
