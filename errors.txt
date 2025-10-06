@@ -16,3 +16,17 @@
     logger.info(f"  → Executing: {tool_name}")
 Message: '  → Executing: speak_to_customer'
 Arguments: ()
+
+
+        results = [
+            {
+                "call_sid": call.call_sid,
+                "customer_id": call.customer_id,
+                "verification_status": call.verification_status,
+                "identity_verified": call.identity_verified,
+                "consent_given": call.consent_given,
+                "created_at": call.created_at.isoformat(),
+            }
+            for call in calls
+        ]
+        return results
