@@ -117,34 +117,44 @@ class SessionManager:
             except Exception as e:
                 print(f"WebSocket status update error: {e}")
 
+    async def send_input_prompt(self):
+        """Signal the frontend that user input is now required."""
+        if self.websocket:
+            try:
+                await self.websocket.send_json({"type": "input_required"})
+            except Exception as e:
+                print(f"WebSocket send_input_prompt error: {e}")
+
     async def run_verification(self):
         """Run the verification workflow asynchronously"""
         self.running = True
-
-        # --- START OF FIX for "no running event loop" error ---
-        # Get the main event loop to which we will send tasks from the background thread.
         main_loop = asyncio.get_running_loop()
-        # --- END OF FIX ---
 
         try:
             original_input = __builtins__.input
             original_print = print
 
-            # --- START OF FIX: Redefined queued_input and custom_print ---
             def queued_input(prompt=""):
-                if "You (customer):" in prompt or "CUSTOMER INPUT REQUIRED" in prompt:
+                # This check is crucial. We only want to block for user input
+                # when the agent is explicitly listening to the customer.
+                if "You (customer):" in prompt:
                     try:
+                        # Signal the frontend that we are waiting for input
+                        asyncio.run_coroutine_threadsafe(
+                            self.send_input_prompt(), main_loop
+                        )
+
                         # Create a coroutine to get an item from the async queue
                         coro = self.input_queue.get()
                         # Submit this coroutine to the main event loop from our current (worker) thread
                         future = asyncio.run_coroutine_threadsafe(coro, main_loop)
                         # Block the worker thread and wait for the result, with a timeout.
-                        # This mimics the behavior of the synchronous input() function.
                         user_input = future.result(timeout=300)
                         return user_input
                     except (FuturesTimeoutError, asyncio.TimeoutError):
-                        print("User input timed out.")
+                        original_print("User input timed out.")
                         return ""
+                # For any other `input()` call that might exist, return an empty string immediately.
                 return ""
 
             def custom_print(*args, **kwargs):
@@ -167,8 +177,6 @@ class SessionManager:
                         self.add_to_chat("agent", agent_msg, {"from_print": True}),
                         main_loop,
                     )
-
-            # --- END OF FIX ---
 
             __builtins__.input = queued_input
             __builtins__.print = custom_print
@@ -819,15 +827,14 @@ HTML_TEMPLATE = """
                 if (response.ok) {
                     sessionId = data.session_id;
                     
-                    // Hide start screen, show chat
                     document.getElementById('startScreen').classList.add('hidden');
                     document.getElementById('sidebar').classList.remove('hidden');
                     document.getElementById('chatInterface').classList.remove('hidden');
+                    
+                    // Disable input until the agent signals it's ready
+                    disableInput();
 
-                    // Connect WebSocket
                     connectWebSocket();
-
-                    // Update status
                     updateConnectionStatus('Connected', true);
                 } else {
                     alert('Error: ' + (data.detail || 'Unknown error'));
@@ -860,6 +867,8 @@ HTML_TEMPLATE = """
                     displayMessage(data.data);
                 } else if (data.type === 'status') {
                     updateStatus(data.data);
+                } else if (data.type === 'input_required') {
+                    enableInput();
                 } else if (data.type === 'error') {
                     console.error('WebSocket error:', data.message);
                 }
@@ -874,7 +883,6 @@ HTML_TEMPLATE = """
                 console.log('WebSocket closed');
                 updateConnectionStatus('Disconnected', false);
                 
-                // Attempt to reconnect
                 if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
                     reconnectAttempts++;
                     console.log(`Reconnecting... (${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`);
@@ -936,6 +944,25 @@ HTML_TEMPLATE = """
                 `${status.questions_completed || 0}/${status.total_questions || 19}`;
         }
 
+        function enableInput() {
+            const sendButton = document.getElementById('sendButton');
+            const messageInput = document.getElementById('messageInput');
+            sendButton.disabled = false;
+            sendButton.innerHTML = 'Send';
+            messageInput.disabled = false;
+            messageInput.placeholder = 'Type your response...';
+            messageInput.focus();
+        }
+
+        function disableInput() {
+            const sendButton = document.getElementById('sendButton');
+            const messageInput = document.getElementById('messageInput');
+            sendButton.disabled = true;
+            sendButton.innerHTML = '<span class="loading"></span>';
+            messageInput.disabled = true;
+            messageInput.placeholder = 'Waiting for agent...';
+        }
+
         function sendMessage() {
             const input = document.getElementById('messageInput');
             const message = input.value.trim();
@@ -947,14 +974,13 @@ HTML_TEMPLATE = """
                 return;
             }
 
-            // Send via WebSocket
             ws.send(JSON.stringify({
                 type: 'message',
                 message: message
             }));
 
             input.value = '';
-            input.focus();
+            disableInput();
         }
 
         function handleKeyPress(event) {
@@ -963,14 +989,12 @@ HTML_TEMPLATE = """
             }
         }
 
-        // Keep connection alive with periodic pings
         setInterval(() => {
             if (ws && ws.readyState === WebSocket.OPEN) {
                 ws.send(JSON.stringify({ type: 'ping' }));
             }
         }, 30000);
 
-        // Focus input when chat becomes visible
         document.addEventListener('DOMContentLoaded', () => {
             const observer = new MutationObserver(() => {
                 const chatInterface = document.getElementById('chatInterface');
