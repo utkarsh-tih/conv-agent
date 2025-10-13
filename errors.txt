@@ -1,32 +1,30 @@
-  File "C:\Users\Admin\Desktop\utkarsh\conv-agent\spike7_questionnaire_textmode_logging.py", line 893, in run_loan_verification_call
-    final_state = app.invoke(initial_state)
-  File "C:\Users\Admin\Desktop\utkarsh\conv-agent\.venv\Lib\site-packages\langgraph\pregel\main.py", line 3068, in invoke
-    for chunk in self.stream(
-  File "C:\Users\Admin\Desktop\utkarsh\conv-agent\.venv\Lib\site-packages\langgraph\pregel\main.py", line 2657, in stream
-    for _ in runner.tick(
-  File "C:\Users\Admin\Desktop\utkarsh\conv-agent\.venv\Lib\site-packages\langgraph\pregel\_runner.py", line 162, in tick
-    run_with_retry(
-  File "C:\Users\Admin\Desktop\utkarsh\conv-agent\.venv\Lib\site-packages\langgraph\pregel\_retry.py", line 42, in run_with_retry
-    return task.proc.invoke(task.input, config)
-  File "C:\Users\Admin\Desktop\utkarsh\conv-agent\.venv\Lib\site-packages\langgraph\_internal\_runnable.py", line 657, in invoke
-    input = context.run(step.invoke, input, config, **kwargs)
-  File "C:\Users\Admin\Desktop\utkarsh\conv-agent\.venv\Lib\site-packages\langgraph\_internal\_runnable.py", line 401, in invoke
-    ret = self.func(*args, **kwargs)
-  File "C:\Users\Admin\Desktop\utkarsh\conv-agent\spike7_questionnaire_textmode_logging.py", line 664, in tool_execution_node
-    logger.info(f"  → Executing: {tool_name}")
-Message: '  → Executing: speak_to_customer'
-Arguments: ()
+❌ Error: print() got multiple values for keyword argument 'file'
 
-
-        results = [
-            {
-                "call_sid": call.call_sid,
-                "customer_id": call.customer_id,
-                "verification_status": call.verification_status,
-                "identity_verified": call.identity_verified,
-                "consent_given": call.consent_given,
-                "created_at": call.created_at.isoformat(),
-            }
-            for call in calls
-        ]
-        return results
+--- Logging error ---
+--- Logging error ---
+--- Logging error ---
+Exception ignored in: <bound method BaseEventLoop.call_exception_handler of <ProactorEventLoop running=True closed=False debug=False>>
+Traceback (most recent call last):
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\asyncio\base_events.py", line 1804, in call_exception_handler
+    logger.error('Exception in default exception handler',
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\logging\__init__.py", line 1518, in error
+    self._log(ERROR, msg, args, **kwargs)
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\logging\__init__.py", line 1634, in _log
+    self.handle(record)
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\logging\__init__.py", line 1644, in handle
+    self.callHandlers(record)
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\logging\__init__.py", line 1714, in callHandlers
+    lastResort.handle(record)
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\logging\__init__.py", line 978, in handle
+    self.emit(record)
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\logging\__init__.py", line 1118, in emit
+    self.handleError(record)
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\logging\__init__.py", line 1032, in handleError
+    traceback.print_exception(t, v, tb, None, sys.stderr)
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\traceback.py", line 125, in print_exception
+    te.print(file=file, chain=chain)
+  File "C:\Users\Admin\AppData\Local\Programs\Python\Python311\Lib\traceback.py", line 982, in print
+    print(line, file=file, end="")
+  File "c:\Users\Admin\Desktop\utkarsh\conv-agent\s7_tm_fastapi.py", line 149, in custom_print
+    original_print(*args, file=output, **kwargs)
+KeyError: 'file'
