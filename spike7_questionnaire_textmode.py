@@ -447,7 +447,7 @@ tools = [
 def create_llm():
     """Create LLM instance with all tools bound."""
     llm = ChatOllama(
-        model="llama3.2", temperature=0.3, base_url="http://localhost:11434"
+        model="llama3.2:1b", temperature=0.3, base_url="http://localhost:11434"
     )
     return llm.bind_tools(tools)
 
