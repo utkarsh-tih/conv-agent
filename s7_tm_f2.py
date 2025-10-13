@@ -15,6 +15,8 @@ import os
 from typing import Dict, Optional
 import json
 from datetime import datetime
+from concurrent.futures import TimeoutError as FuturesTimeoutError
+
 
 # Set text mode before importing the main module
 os.environ["TEXT_MODE"] = "true"
@@ -119,84 +121,62 @@ class SessionManager:
         """Run the verification workflow asynchronously"""
         self.running = True
 
-        try:
-            # Monkey-patch input() to use our async queue
-            original_input = __builtins__.input
+        # --- START OF FIX for "no running event loop" error ---
+        # Get the main event loop to which we will send tasks from the background thread.
+        main_loop = asyncio.get_running_loop()
+        # --- END OF FIX ---
 
+        try:
+            original_input = __builtins__.input
+            original_print = print
+
+            # --- START OF FIX: Redefined queued_input and custom_print ---
             def queued_input(prompt=""):
-                # Agent is asking for input
                 if "You (customer):" in prompt or "CUSTOMER INPUT REQUIRED" in prompt:
                     try:
-                        # Create a new event loop task to wait for input
-                        loop = asyncio.new_event_loop()
-                        asyncio.set_event_loop(loop)
-                        user_input = loop.run_until_complete(
-                            asyncio.wait_for(self.input_queue.get(), timeout=300)
-                        )
+                        # Create a coroutine to get an item from the async queue
+                        coro = self.input_queue.get()
+                        # Submit this coroutine to the main event loop from our current (worker) thread
+                        future = asyncio.run_coroutine_threadsafe(coro, main_loop)
+                        # Block the worker thread and wait for the result, with a timeout.
+                        # This mimics the behavior of the synchronous input() function.
+                        user_input = future.result(timeout=300)
                         return user_input
-                    except asyncio.TimeoutError:
+                    except (FuturesTimeoutError, asyncio.TimeoutError):
+                        print("User input timed out.")
                         return ""
                 return ""
 
-            __builtins__.input = queued_input
-
-            # Capture print statements to extract agent messages
-            captured_output = []
-            original_print = print
-
-            # def custom_print(*args, **kwargs):
-            #     output = StringIO()
-            #     original_print(*args, file=output, **kwargs)
-            #     text = output.getvalue().strip()
-            #     captured_output.append(text)
-
-            #     # Check if this is an agent message
-            #     if "Agent:" in text:
-            #         # Extract the agent's message
-            #         agent_msg = text.split("Agent:", 1)[1].strip()
-            #         # Send it via WebSocket
-            #         asyncio.create_task(
-            #             self.add_to_chat("agent", agent_msg, {"from_print": True})
-            #         )
-
             def custom_print(*args, **kwargs):
-                # If the print call is already being directed to a specific file,
-                # let it pass through without capturing it for the WebSocket.
                 if "file" in kwargs and kwargs["file"] is not None:
                     return original_print(*args, **kwargs)
 
-                # Capture output destined for stdout
                 output = StringIO()
                 original_print(*args, file=output, **kwargs)
                 text = output.getvalue().strip()
-
                 if not text:
                     return
 
-                captured_output.append(text)
-
-                # Check if this is an agent message to be sent via WebSocket
                 if "Agent:" in text:
-                    # Extract the agent's message
                     agent_msg = text.split("Agent:", 1)[1].strip()
-                    # Send it via WebSocket
-                    asyncio.create_task(
-                        self.add_to_chat("agent", agent_msg, {"from_print": True})
+                    # Safely schedule the async add_to_chat function to run on the main event loop
+                    asyncio.run_coroutine_threadsafe(
+                        self.add_to_chat("agent", agent_msg, {"from_print": True}),
+                        main_loop,
                     )
 
-            # Replace print temporarily
-            import builtins
+            # --- END OF FIX ---
 
-            builtins.print = custom_print
+            __builtins__.input = queued_input
+            __builtins__.print = custom_print
 
-            # Run the graph in a thread pool to avoid blocking
-            loop = asyncio.get_event_loop()
-            final_state = await loop.run_in_executor(
+            # Run the synchronous graph code in a thread pool to avoid blocking the main loop
+            final_state = await main_loop.run_in_executor(
                 None, lambda: self.graph.invoke(self.state)
             )
 
             # Restore original functions
-            builtins.print = original_print
+            __builtins__.print = original_print
             __builtins__.input = original_input
 
             # Update state
@@ -217,7 +197,7 @@ class SessionManager:
                 verification_status = "failed"
 
             # Save to database
-            await loop.run_in_executor(
+            await main_loop.run_in_executor(
                 None,
                 lambda: save_loan_verification.invoke(
                     {
