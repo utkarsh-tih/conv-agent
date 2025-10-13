@@ -147,22 +147,43 @@ class SessionManager:
                         return ""
                 return ""
 
-            def custom_print(*args, **kwargs):
-                if "file" in kwargs and kwargs["file"] is not None:
-                    return original_print(*args, **kwargs)
+            # def custom_print(*args, **kwargs):
+            #     if "file" in kwargs and kwargs["file"] is not None:
+            #         return original_print(*args, **kwargs)
 
+            #     output = StringIO()
+            #     original_print(*args, file=output, **kwargs)
+            #     text = output.getvalue().strip()
+            #     if not text:
+            #         return
+
+            #     if "Agent:" in text:
+            #         agent_msg = text.split("Agent:", 1)[1].strip()
+            #         # Safely schedule the async add_to_chat function to run on the main event loop
+            #         asyncio.run_coroutine_threadsafe(
+            #             self.add_to_chat("agent", agent_msg, {"from_print": True}),
+            #             main_loop,
+            #         )
+
+            def custom_print(*args, **kwargs):
+                # 1. Always print to the actual console to maintain logging visibility.
+                original_print(*args, **kwargs)
+
+                # 2. Capture the output to a string to inspect it.
                 output = StringIO()
+                # We need to print to the StringIO object to capture the content.
                 original_print(*args, file=output, **kwargs)
                 text = output.getvalue().strip()
+                
                 if not text:
                     return
 
-                if "Agent:" in text:
+                # 3. If it's an agent message, *also* send it to the WebSocket UI.
+                if text.startswith("Agent:"):
                     agent_msg = text.split("Agent:", 1)[1].strip()
-                    # Safely schedule the async add_to_chat function to run on the main event loop
                     asyncio.run_coroutine_threadsafe(
                         self.add_to_chat("agent", agent_msg, {"from_print": True}),
-                        main_loop,
+                        main_loop
                     )
 
             # --- END OF FIX ---
