@@ -645,17 +645,20 @@ def tool_execution_node(state: LoanVerificationState) -> LoanVerificationState:
     last_message = state["messages"][-1]
     tool_messages = []
 
-    if hasattr(last_message, "tool_calls") and last_message.tool_calls:
-        for tool_call in last_message.tool_calls:
-            tool_name = tool_call["name"]
-            tool_args = tool_call["args"]
+    if not (hasattr(last_message, "tool_calls") and last_message.tool_calls):
+        return state  # No tools to execute
 
-            print(f"  → Executing: {tool_name}")
+    for tool_call in last_message.tool_calls:
+        tool_name = tool_call["name"]
+        tool_args = tool_call["args"]
 
-            tool_func = next((t for t in tools if t.name == tool_name), None)
-            if not tool_func:
-                continue
+        print(f"  → Executing: {tool_name}")
 
+        tool_func = next((t for t in tools if t.name == tool_name), None)
+        if not tool_func:
+            # If tool is not found, we should still provide a result
+            result = {"error": f"Tool '{tool_name}' not found."}
+        else:
             # Inject language if needed
             if tool_name in ["speak_to_customer", "listen_to_customer"]:
                 if "language" not in tool_args:
@@ -663,98 +666,95 @@ def tool_execution_node(state: LoanVerificationState) -> LoanVerificationState:
 
             result = tool_func.invoke(tool_args)
 
-            # --- START OF REVISED LOGIC ---
+        # --- START OF THE CORRECTED LOGIC ---
 
-            # Default state updates for ALL tools
-            state_updated = False
-            if tool_name == "speak_to_customer":
-                audio_path = result.get("audio_path", "")
-                if audio_path:
-                    state["audio_paths"].append(audio_path)
+        # 1. ALWAYS create a ToolMessage for every tool call. This is the fundamental
+        # requirement for the agent to continue.
+        tool_messages.append(
+            ToolMessage(content=json.dumps(result), tool_call_id=tool_call["id"])
+        )
+
+        # 2. SEPARATELY, perform state updates based on the tool that was called.
+        #    This keeps the agent protocol separate from our application's state management.
+        if tool_name == "speak_to_customer":
+            audio_path = result.get("audio_path", "")
+            if audio_path:
+                state["audio_paths"].append(audio_path)
+            state["transcript"].append(
+                {
+                    "speaker": "agent",
+                    "text": tool_args.get("text", ""),
+                    "timestamp": datetime.now().isoformat(),
+                    "audio_path": audio_path,
+                }
+            )
+
+        elif tool_name == "listen_to_customer":
+            customer_text = result.get("text", "")
+            audio_path = result.get("audio_path", "")
+            if audio_path:
+                state["audio_paths"].append(audio_path)
+
+            state["last_audio_quality"] = result.get("quality", "unknown")
+
+            if customer_text:
                 state["transcript"].append(
                     {
-                        "speaker": "agent",
-                        "text": tool_args.get("text", ""),
+                        "speaker": "customer",
+                        "text": customer_text,
+                        "confidence": result.get("confidence", 0),
+                        "quality": result.get("quality", "unknown"),
                         "timestamp": datetime.now().isoformat(),
                         "audio_path": audio_path,
                     }
                 )
-                state_updated = True
+                # SPECIAL CASE: Add a HumanMessage so the LLM sees the user's response
+                # in the next turn. This is critical for conversation flow.
+                state["messages"].append(HumanMessage(content=customer_text))
 
-            elif tool_name == "get_loan_applicant_data":
-                state["applicant_data"] = result
-                state["language"] = result.get("language_preference", "english")
-                state_updated = True
+        elif tool_name == "get_loan_applicant_data":
+            state["applicant_data"] = result
+            state["language"] = result.get("language_preference", "english")
 
-            elif tool_name == "verify_consent":
-                state["consent_given"] = result.get("consent_given", False)
+        elif tool_name == "verify_consent":
+            if result.get("consent_given", False):
+                state["consent_given"] = True
+                print("  ✓ Consent granted")
+            else:
+                state["consent_given"] = False
+                print("  ✗ Consent not granted")
+
+        elif tool_name == "verify_identity":
+            if result.get("verified", False):
+                state["identity_verified"] = True
+                state["identity_retry_count"] = 0
+                print("  ✓ Identity verified")
+            else:
+                state["identity_retry_count"] += 1
                 print(
-                    f"  ✓ Consent granted"
-                    if state["consent_given"]
-                    else "  ✗ Consent not granted"
+                    f"  ✗ Identity verification failed (attempt {state['identity_retry_count']}/3)"
                 )
-                state_updated = True
 
-            elif tool_name == "verify_identity":
-                if result.get("verified", False):
-                    state["identity_verified"] = True
-                    state["identity_retry_count"] = 0
-                    print("  ✓ Identity verified")
-                else:
-                    state["identity_retry_count"] += 1
-                    print(
-                        f"  ✗ Identity verification failed (attempt {state['identity_retry_count']}/3)"
-                    )
-                state_updated = True
-
-            elif tool_name == "extract_verification_data":
-                state["verification_data"] = result.get(
-                    "updated_data", state["verification_data"]
-                )
-                q_id = tool_args.get("question_id", "")
-                if q_id and q_id not in state["questions_completed"]:
-                    state["questions_completed"].append(q_id)
-                current_q_num = int(state.get("current_question_id", "1"))
-                next_q_num = current_q_num + 1
-                if next_q_num == 13:
-                    next_q_num = 14
-                if next_q_num <= 20:
-                    state["current_question_id"] = str(next_q_num)
-                else:
-                    state["stage"] = "closing"
-                state_updated = True
-
-            # Special handling for listen_to_customer
-            elif tool_name == "listen_to_customer":
-                customer_text = result.get("text", "")
-                state["last_audio_quality"] = result.get("quality", "unknown")
-                audio_path = result.get("audio_path", "")
-                if audio_path:
-                    state["audio_paths"].append(audio_path)
-
-                if customer_text:
-                    state["transcript"].append(
-                        {
-                            "speaker": "customer",
-                            "text": customer_text,
-                            "confidence": result.get("confidence", 0),
-                            "quality": result.get("quality", "unknown"),
-                            "timestamp": datetime.now().isoformat(),
-                            "audio_path": audio_path,
-                        }
-                    )
-                    # Add HumanMessage so the LLM sees the user's response in the next turn
-                    state["messages"].append(HumanMessage(content=customer_text))
-                state_updated = True
-
-            # CRITICAL: ALL tool calls must have a corresponding ToolMessage.
-            tool_msg = ToolMessage(
-                content=json.dumps(result), tool_call_id=tool_call["id"]
+        elif tool_name == "extract_verification_data":
+            state["verification_data"] = result.get(
+                "updated_data", state["verification_data"]
             )
-            tool_messages.append(tool_msg)
+            q_id = tool_args.get("question_id", "")
+            if q_id and q_id not in state["questions_completed"]:
+                state["questions_completed"].append(q_id)
 
-            # --- END OF REVISED LOGIC ---
+            current_q_num = int(state.get("current_question_id", "1"))
+            next_q_num = current_q_num + 1
+            if next_q_num == 13:
+                next_q_num = 14  # Skip non-existent question
+            if next_q_num <= 20:
+                state["current_question_id"] = str(next_q_num)
+            else:
+                state["stage"] = "closing"
 
+        # --- END OF THE CORRECTED LOGIC ---
+
+    # Add all the generated tool messages to the state
     state["messages"].extend(tool_messages)
     state["turn_count"] += 1
     return state
