@@ -144,13 +144,38 @@ class SessionManager:
             captured_output = []
             original_print = print
 
+            # def custom_print(*args, **kwargs):
+            #     output = StringIO()
+            #     original_print(*args, file=output, **kwargs)
+            #     text = output.getvalue().strip()
+            #     captured_output.append(text)
+
+            #     # Check if this is an agent message
+            #     if "Agent:" in text:
+            #         # Extract the agent's message
+            #         agent_msg = text.split("Agent:", 1)[1].strip()
+            #         # Send it via WebSocket
+            #         asyncio.create_task(
+            #             self.add_to_chat("agent", agent_msg, {"from_print": True})
+            #         )
+
             def custom_print(*args, **kwargs):
+                # If the print call is already being directed to a specific file,
+                # let it pass through without capturing it for the WebSocket.
+                if 'file' in kwargs and kwargs['file'] is not None:
+                    return original_print(*args, **kwargs)
+
+                # Capture output destined for stdout
                 output = StringIO()
                 original_print(*args, file=output, **kwargs)
                 text = output.getvalue().strip()
+                
+                if not text:
+                    return
+                
                 captured_output.append(text)
 
-                # Check if this is an agent message
+                # Check if this is an agent message to be sent via WebSocket
                 if "Agent:" in text:
                     # Extract the agent's message
                     agent_msg = text.split("Agent:", 1)[1].strip()
