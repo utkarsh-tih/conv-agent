@@ -638,6 +638,7 @@ Be warm and professional in closing."""
     return state
 
 
+# Replace the entire existing function with this corrected and complete version.
 def tool_execution_node(state: LoanVerificationState) -> LoanVerificationState:
     """Execute tools called by the LLM with enhanced state tracking."""
     print("[TOOL EXECUTION NODE]")
@@ -656,26 +657,20 @@ def tool_execution_node(state: LoanVerificationState) -> LoanVerificationState:
 
         tool_func = next((t for t in tools if t.name == tool_name), None)
         if not tool_func:
-            # If tool is not found, we should still provide a result
             result = {"error": f"Tool '{tool_name}' not found."}
         else:
-            # Inject language if needed
             if tool_name in ["speak_to_customer", "listen_to_customer"]:
                 if "language" not in tool_args:
                     tool_args["language"] = state["language"]
 
             result = tool_func.invoke(tool_args)
 
-        # --- START OF THE CORRECTED LOGIC ---
-
-        # 1. ALWAYS create a ToolMessage for every tool call. This is the fundamental
-        # requirement for the agent to continue.
+        # 1. ALWAYS create a ToolMessage for every tool call. This is required for the agent to continue.
         tool_messages.append(
             ToolMessage(content=json.dumps(result), tool_call_id=tool_call["id"])
         )
 
         # 2. SEPARATELY, perform state updates based on the tool that was called.
-        #    This keeps the agent protocol separate from our application's state management.
         if tool_name == "speak_to_customer":
             audio_path = result.get("audio_path", "")
             if audio_path:
@@ -692,10 +687,23 @@ def tool_execution_node(state: LoanVerificationState) -> LoanVerificationState:
         elif tool_name == "listen_to_customer":
             customer_text = result.get("text", "")
             audio_path = result.get("audio_path", "")
+            quality = result.get("quality", "unknown")
+
             if audio_path:
                 state["audio_paths"].append(audio_path)
 
-            state["last_audio_quality"] = result.get("quality", "unknown")
+            state["last_audio_quality"] = quality
+
+            # --- START OF RESTORED LOGIC ---
+            # This logic was mistakenly removed and is now restored.
+            # It helps the agent decide if it needs to ask the user to repeat themselves.
+            if quality in ["unclear", "failed"]:
+                state["needs_clarification"] = True
+                state["retry_count"] += 1
+            else:
+                state["needs_clarification"] = False
+                state["retry_count"] = 0
+            # --- END OF RESTORED LOGIC ---
 
             if customer_text:
                 state["transcript"].append(
@@ -703,13 +711,12 @@ def tool_execution_node(state: LoanVerificationState) -> LoanVerificationState:
                         "speaker": "customer",
                         "text": customer_text,
                         "confidence": result.get("confidence", 0),
-                        "quality": result.get("quality", "unknown"),
+                        "quality": quality,
                         "timestamp": datetime.now().isoformat(),
                         "audio_path": audio_path,
                     }
                 )
                 # SPECIAL CASE: Add a HumanMessage so the LLM sees the user's response
-                # in the next turn. This is critical for conversation flow.
                 state["messages"].append(HumanMessage(content=customer_text))
 
         elif tool_name == "get_loan_applicant_data":
@@ -717,12 +724,12 @@ def tool_execution_node(state: LoanVerificationState) -> LoanVerificationState:
             state["language"] = result.get("language_preference", "english")
 
         elif tool_name == "verify_consent":
-            if result.get("consent_given", False):
-                state["consent_given"] = True
-                print("  ✓ Consent granted")
-            else:
-                state["consent_given"] = False
-                print("  ✗ Consent not granted")
+            state["consent_given"] = result.get("consent_given", False)
+            print(
+                f"  ✓ Consent granted"
+                if state["consent_given"]
+                else "  ✗ Consent not granted"
+            )
 
         elif tool_name == "verify_identity":
             if result.get("verified", False):
@@ -746,13 +753,11 @@ def tool_execution_node(state: LoanVerificationState) -> LoanVerificationState:
             current_q_num = int(state.get("current_question_id", "1"))
             next_q_num = current_q_num + 1
             if next_q_num == 13:
-                next_q_num = 14  # Skip non-existent question
+                next_q_num = 14
             if next_q_num <= 20:
                 state["current_question_id"] = str(next_q_num)
             else:
                 state["stage"] = "closing"
-
-        # --- END OF THE CORRECTED LOGIC ---
 
     # Add all the generated tool messages to the state
     state["messages"].extend(tool_messages)
