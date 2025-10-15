@@ -1,0 +1,18 @@
+graph TD
+    A[START] --> B[consent_node]
+    B -->|consent_given = None| Z[PAUSE: Wait for input]
+    B -->|consent_given = False| E[exit_node]
+    B -->|consent_given = True| C[authenticate_node]
+    C -->|authenticated = None| Z
+    C -->|auth failed, attempts < 3| C
+    C -->|auth failed, attempts ≥ 3| E
+    C -->|authenticated = True| D[ask_question]
+    D --> F[extract_answer]
+    F --> G[check_retry]
+    G -->|complete or retries ≥ 3| H{All questions done?}
+    G -->|incomplete, retries < 3| D
+    H -->|Yes| I[final_node]
+    H -->|No| D
+    E --> END
+    I --> END
+    Z --> END
