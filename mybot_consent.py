@@ -14,7 +14,10 @@ from langchain_core.messages import (
 from langgraph.graph.message import add_messages
 from typing import Annotated, Sequence, TypedDict, Literal
 from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langgraph.types import Command, interrupt
 
+
+import json
 
 NODES = Literal[
     "get_consent_node",
@@ -28,7 +31,9 @@ CHROMADB_DIRECTORY = "./chroma_langchain_db"
 """
 Initialisation of LLM, Embeddings and Vector Store
 """
-llm = ChatOllama(model=MODEL, temperature=0.3, base_url="http://localhost:11434")
+llm = ChatOllama(
+    model=MODEL, temperature=0, base_url="http://localhost:11434", format="json"
+)
 # embeddings = OllamaEmbeddings(model=MODEL)
 # vector_store = Chroma(collection_name = "example_collection", embedding_function= embeddings, persist_directory= CHROMADB_DIRECTORY)
 
@@ -75,6 +80,8 @@ class AgentState(TypedDict):
     # Authentication & Consent
     consent_asked: bool
     consent_given: bool
+    consent_confidence: int
+    consent_reasoning: str
     auth_question_asked: bool
     authenticated: bool
     auth_attempts: int
@@ -90,8 +97,8 @@ class AgentState(TypedDict):
     repeat_count: dict
     extraction_status: str
 
-    # Compliance
-    conversation_transcript: list
+    # # Compliance
+    # conversation_transcript: list
 
 
 def model_call(state: AgentState) -> AgentState:
@@ -101,8 +108,8 @@ def model_call(state: AgentState) -> AgentState:
 
 
 def get_consent_node(state: AgentState) -> AgentState:
-    print("====Get Consent Runnable ===")
-    if state["consent_asked"] != True:
+    print("==== Get Consent Runnable ===")
+    if not state.get("consent_asked", False):
         message = AIMessage(
             content=(
                 "Hello! Before we begin the verification process, I need your consent. "
@@ -110,64 +117,124 @@ def get_consent_node(state: AgentState) -> AgentState:
                 "Do you agree to proceed? (Please say yes or no)"
             )
         )
-        state["messages"] = message
+        state["messages"] = [message]
         state["consent_asked"] = True
-        state["conversation_transcript"] = [
-            {"role": "assistant", "content": message.content}
-        ]
     return state
 
 
 def process_consent_node(state: AgentState) -> AgentState:
-    if state["consent_given"] == True:
-        return state
-    elif state["consent_given"] == False:
-        return state
+    print("==== Process Consent Runnable ===")
 
+    # Get human input (this will be a string when resumed)
+    consent_human_input = interrupt("waiting_for_consent")
 
-def get_authentication_node(state: AgentState) -> AgentState:
-    print("==== Get Authentication Runnable ===")
-    message = AIMessage(
-        content=(
-            "For security purposes, please provide:\n"
-            "1. Your date of birth (DD/MM/YYYY)\n"
-            "2. Last 4 digits of your Aadhar card"
+    # Add the human response to messages
+    human_message = HumanMessage(content=consent_human_input)
+
+    # Create a prompt for the LLM to interpret consent
+    consent_check_messages = [
+        SystemMessage(
+            content=(
+                "You are a consent validator. The user was asked if they consent to being recorded. "
+                "Analyze their response and return a JSON object with the following structure:\n"
+                "{\n"
+                '  "consent_given": true/false,\n'
+                '  "confidence": 0-100,\n'
+                '  "reasoning": "brief explanation"\n'
+                "}\n\n"
+                "Consent is given for responses like: 'yes', 'yeah', 'sure', 'ok', 'I agree', 'I consent'. "
+                "Consent is NOT given for: 'no', 'nope', unclear responses, or anything ambiguous."
+            )
+        ),
+        human_message,
+    ]
+
+    # Get LLM interpretation
+    llm_output = llm.invoke(consent_check_messages)
+
+    # Parse the JSON response
+    try:
+        consent_data = json.loads(llm_output.content)
+        consent_given = consent_data.get("consent_given", False)
+        confidence = consent_data.get("confidence", 0)
+        reasoning = consent_data.get("reasoning", "")
+
+        print(f"Consent Analysis: {consent_data}")
+
+    except json.JSONDecodeError as e:
+        print(f"Error parsing LLM response: {e}")
+        consent_given = False
+        confidence = 0
+        reasoning = "Failed to parse response"
+
+    # Update state
+    state["consent_given"] = consent_given
+    state["consent_confidence"] = confidence
+    state["consent_reasoning"] = reasoning
+
+    # Add both messages to conversation
+    if consent_given:
+        ai_response = AIMessage(
+            content="Thank you for your consent. Let's proceed with the verification."
         )
-    )
-    state["conversation_transcript"].append(
-        {"role": "assistant", "content": message.content}
-    )
-    state["auth_question_asked"] = True
+    else:
+        ai_response = AIMessage(
+            content=f"I understand you did not consent. {reasoning}. Goodbye."
+        )
+
+    state["messages"] = [human_message, ai_response]  # Both messages
 
     return state
 
 
-def process_authentication_node(state: AgentState) -> AgentState:
-    state["auth_attempts"] += 1
-    pass
+# def process_consent_node(state: AgentState)-> AgentState:
+#     print("==== Process Consent Runnable ===")
+#     consent_human_input = interrupt("User:")
+#     llm_output = llm.invoke(consent_human_input, )
+#     if state["consent_given"] == True:
+#         return state
+#     elif state["consent_given"] == False:
+#         return state
+
+# def get_authentication_node(state: AgentState)-> AgentState:
+#     print("==== Get Authentication Runnable ===")
+#     message = AIMessage(
+#         content=(
+#             "For security purposes, please provide:\n"
+#             "1. Your date of birth (DD/MM/YYYY)\n"
+#             "2. Last 4 digits of your Aadhar card"
+#         )
+#     )
+#     state["conversation_transcript"].append(
+#         {"role": "assistant", "content": message.content}
+#     )
+#     state["auth_question_asked"] = True
+
+#     return state
+
+# def process_authentication_node(state: AgentState)-> AgentState:
+#     state["auth_attempts"] += 1
+#     pass
+
+# def ask_question(state: AgentState)-> AgentState:
+#     pass
+
+# def extract_answer(state: AgentState)-> AgentState:
+#     pass
 
 
-def ask_question(state: AgentState) -> AgentState:
-    pass
+# #conditional edge
+# def is_retry_required(state: AgentState)-> NODES:
+#     pass
 
-
-def extract_answer(state: AgentState) -> AgentState:
-    pass
-
-
-# conditional edge
-def is_retry_required(state: AgentState) -> NODES:
-    pass
-
-
-def is_consent_given(state: AgentState):
-    if state["consent_given"] == True:
-        pass
+# def is_consent_given(state: AgentState):
+#     if state["consent_given"]==True:
+#         pass
 
 
 workflow = StateGraph(AgentState)
 
-
-app = workflow.compile()
+checkpointer = MemorySaver()
+app = workflow.compile(checkpointer=checkpointer)
 initial_state = AgentState()
 app.invoke(initial_state)
