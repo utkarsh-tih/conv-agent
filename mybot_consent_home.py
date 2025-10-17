@@ -1,0 +1,245 @@
+from langgraph.checkpoint.memory import MemorySaver
+from langgraph.graph import START, MessagesState, StateGraph
+
+# from langchain.vectorstores import Chroma
+import os
+from langchain_ollama import ChatOllama, OllamaEmbeddings
+from langchain_core.messages import (
+    BaseMessage,
+    HumanMessage,
+    ToolMessage,
+    SystemMessage,
+    AIMessage,
+)
+from langgraph.graph.message import add_messages
+from typing import Annotated, Sequence, TypedDict, Literal
+from langchain_core.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langgraph.types import Command, interrupt
+from pydantic import BaseModel, Field
+from enum import Enum
+import json
+
+NODES = Literal[
+    "get_consent_node",
+    "process_consent_node",
+    "get_authentication_node",
+    "process_authetication_node",
+]
+MODEL = "llama3.2:1b"
+CHROMADB_DIRECTORY = "./chroma_langchain_db"
+
+"""
+Initialisation of LLM, Embeddings and Vector Store
+"""
+llm = ChatOllama(
+    model=MODEL, temperature=0, base_url="http://localhost:11434", format="json"
+)
+# embeddings = OllamaEmbeddings(model=MODEL)
+# vector_store = Chroma(collection_name = "example_collection", embedding_function= embeddings, persist_directory= CHROMADB_DIRECTORY)
+
+class SystemPrompts(Enum):
+    PROCESS_CONSENT = (
+                "You are a consent validator. The user was asked if they consent to being recorded. "
+                "Analyze their response and return a JSON object.\n"
+                "Consent is given for responses like: 'yes', 'yeah', 'sure', 'ok', 'I agree', 'I consent'. "
+                "Consent is NOT given for: 'no', 'nope', unclear responses, or anything ambiguous."
+            )
+
+class AIMessages(Enum):
+    ASK_CONSENT = (
+                "Hello! Before we begin the verification process, I need your consent. "
+                "This conversation will be recorded for compliance purposes. "
+                "Do you agree to proceed? (Please say yes or no)"
+            )
+    POSITIVE_CONSENT_RESPONSE = ("Thank you for your consent. Let's proceed with the verification.")
+    NEGATIVE_CONSENT_RESPONSE = ("I understand you did not consent. Goodbye.")
+
+
+SYSTEM_PROMPT = "You are a calling agent on behalf of credit underwriter, please interpret the answers given by loan applicant and collect relevant data"
+
+class Questions(Enum):
+    VERIFICATION_QUESTIONS = {
+    1: "Could you please confirm the name of the person I'm speaking with?",
+    2: "What documents do you have as proof of your current address? For example, utility bills, rent agreement, etc.",
+    3: "What documents do you have for your permanent address proof?",
+    4: "For your current address, do you have any ownership proof documents?",
+    5: "For your permanent address, do you have ownership proof documents?",
+    6: "Tell me about your current residence - who is the owner, how long have you been staying there, and please provide the complete detailed address.",
+    7: "What is your office address? Please provide the complete address with landmarks.",
+    8: "Regarding your permanent address as per official documents - what is the ownership status, how stable is this address, and please provide the full detailed address.",
+    9: "Do you own any other property? If yes, please provide details - what kind of property, proof of ownership, and how it's related to you. Is it a home loan property or a house in a different city?",
+    10: "Let me know about your family details - your spouse, father, mother - who is working, their income sources, and any asset details.",
+    11: "What is your highest educational qualification? If you're a professional, what is your membership status and which year did you complete your education?",
+    12: "What is your current working mode - work from office, work from home, or hybrid?",
+    14: "What is your official office email ID?",
+    15: "Tell me about your current job - employer name, how long you've been there, your designation, department, are you on third party payroll, working from client location, and any other relevant details.",
+    16: "What is your total work experience? Please mention your previous company names and total years of experience.",
+    17: "Let's discuss your CIBIL details - your score, credit vintage, existing loans with financier names, rate of interest, EMI amounts, tenure, any recent enquiries, any DPD or overdue amounts, and home loan details if any.",
+    18: "Tell me about your banking relationships - all loan and credit card details, your repayment history, any high credits or debits, bounce charges, or return charges.",
+    19: "What was the end use for any loans you took in the last 12 months, and what is the current end use for this loan you're applying for?",
+    20: "Finally, what is the exact loan amount you require?",
+}
+
+
+class AgentState(TypedDict):
+    """
+    State schema using TypedDict for explicit type definitions.
+
+    Why TypedDict instead of MessagesState?
+    - MessagesState is a convenience class that includes messages handling
+    - TypedDict gives you full control and clarity over your state structureF
+    - We use add_messages for proper message list management
+    """
+
+    # Messages with proper reducer
+    messages: Annotated[Sequence[BaseMessage], add_messages]
+
+    # Flow control - tracks which stage we're at
+    stage: str  # "consent", "authenticate", "questions", "complete"
+
+    # Authentication & Consent
+    consent_asked: bool
+    consent_given: bool
+    consent_confidence: int
+    consent_reasoning: str
+    auth_question_asked: bool
+    authenticated: bool
+    auth_attempts: int
+    user_dob: str
+    user_aadhar_digits: str
+
+    # Question Flow
+    current_question: int
+    questions_asked: list[int]
+
+    # Extraction & Retries
+    extracted_data: dict
+    repeat_count: dict
+    extraction_status: str
+
+    # # Compliance
+    # conversation_transcript: list
+
+class ConsentResult(BaseModel):
+    """Analysis of user consent from text."""
+    consent_given: bool = Field(..., description="Whether consent was given")
+    confidence: int = Field(..., description="Confidence level of consent interpretation (0-100)", ge=0, le=100)
+    reasoning: str = Field(..., description="Brief explanation of the consent interpretation")
+
+class AuthenticationResult(BaseModel):
+    """Analysis of user authentication from text."""
+    date_of_birth: str = Field(..., description="User's date of birth in DD/MM/YYYY format")
+    aadhaar_last4: int = Field(..., description="Last 4 digits of user's Aadhaar card")
+    confidence_date_of_birth: int = Field(..., description="Confidence level of date of birth interpretation (0-100)", ge=0, le=100)
+    confidence_aadhaar: int = Field(..., description="Confidence level of Aadhaar interpretation (0-100)", ge=0, le=100)
+    reasoning_date_of_birth: str = Field(..., description="Brief explanation of the date of birth interpretation")
+    reasoning_aadhaar: str = Field(..., description="Brief explanation of the Aadhaar interpretation")
+
+def model_call(state: AgentState) -> AgentState:
+    system_prompt = SystemMessage(content=SYSTEM_PROMPT)
+    response = llm.invoke([system_prompt])
+    return {"messages": [response]}
+
+
+def get_consent_node(state: AgentState) -> AgentState:
+    print("==== Get Consent Runnable ===")
+    if not state.get("consent_asked", False):
+        message = AIMessage(content= AIMessages.ASK_CONSENT.value)
+        state["messages"] = [message]
+        state["consent_asked"] = True
+    return state
+
+
+def process_consent_node(state: AgentState) -> AgentState:
+    print("==== Process Consent Runnable ===")
+
+    # Get human input (this will be a string when resumed)
+    consent_human_input = interrupt("waiting_for_consent")
+
+    # Add the human response to messages
+    human_message = HumanMessage(content=consent_human_input)
+
+    # Create a prompt for the LLM to interpret consent
+    consent_check_messages = [SystemMessage(content=SystemPrompts.PROCESS_CONSENT.value),human_message,]
+
+    # Get LLM interpretation
+    llm_output = llm.with_structured_output(ConsentResult).ainvoke(consent_check_messages,config={"format":"json"})
+    #TODO VARIATION 2 llm_output = llm.with_structured_output(ConsentResult).ainvoke(consent_check_messages)
+
+    # Parse the JSON response
+    try:
+        consent_data = json.loads(llm_output.content)
+        consent_given = consent_data.get("consent_given", False)
+        confidence = consent_data.get("confidence", 0)
+        reasoning = consent_data.get("reasoning", "")
+
+        print(f"Consent Analysis: {consent_data}")
+
+    except json.JSONDecodeError as e:
+        print(f"Error parsing LLM response: {e}")
+        consent_given = False
+        confidence = 0
+        reasoning = "Failed to parse response"
+
+    # Update state
+    state["consent_given"] = consent_given
+    state["consent_confidence"] = confidence
+    state["consent_reasoning"] = reasoning
+
+    # Add both messages to conversation
+    if consent_given:
+        ai_response = AIMessage(
+            content= AIMessages.POSITIVE_CONSENT_RESPONSE.value
+        )
+    else:
+        ai_response = AIMessage(
+            content= AIMessages.NEGATIVE_CONSENT_RESPONSE.value
+        )
+
+    state["messages"] = [human_message, ai_response]  # Both messages
+
+    return state
+
+
+# def get_authentication_node(state: AgentState)-> AgentState:
+#     print("==== Get Authentication Runnable ===")
+#     message = AIMessage(
+#         content=(
+#             "For security purposes, please provide:\n"
+#             "1. Your date of birth (DD/MM/YYYY)\n"
+#             "2. Last 4 digits of your Aadhar card"
+#         )
+#     )
+#     state["conversation_transcript"].append(
+#         {"role": "assistant", "content": message.content}
+#     )
+#     state["auth_question_asked"] = True
+
+#     return state
+
+# def process_authentication_node(state: AgentState)-> AgentState:
+#     state["auth_attempts"] += 1
+#     pass
+
+# def ask_question(state: AgentState)-> AgentState:
+#     pass
+
+# def extract_answer(state: AgentState)-> AgentState:
+#     pass
+
+
+# #conditional edge
+# def is_retry_required(state: AgentState)-> NODES:
+#     pass
+
+# def is_consent_given(state: AgentState):
+#     if state["consent_given"]==True:
+#         pass
+
+
+workflow = StateGraph(AgentState)
+
+checkpointer = MemorySaver()
+app = workflow.compile(checkpointer=checkpointer)
+initial_state = AgentState()
+app.invoke(initial_state)

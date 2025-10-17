@@ -47,3 +47,5 @@ __pycache__/
 .venv
 /.poc
 .poc
+/.myenv
+.myenv
