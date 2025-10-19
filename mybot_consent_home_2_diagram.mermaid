@@ -1,0 +1,32 @@
+graph TD
+    START([START]) --> GetConsent[get_consent_node<br/>Ask for consent]
+    
+    GetConsent --> ProcessConsent[process_consent_node<br/>Validate with LLM<br/>⏸️ interrupt]
+    
+    ProcessConsent --> RouteConsent{route_after_consent}
+    
+    RouteConsent -->|should_retry &&<br/>retry_count < 3| GetConsent
+    RouteConsent -->|consent_given<br/>= true| GetAuth[get_authentication_node<br/>Ask for DOB & Aadhaar]
+    RouteConsent -->|consent_given<br/>= false| END1([END])
+    
+    GetAuth --> ProcessAuth[process_authentication_node<br/>Validate with LLM<br/>⏸️ interrupt]
+    
+    ProcessAuth --> RouteAuth{route_after_authentication}
+    
+    RouteAuth -->|should_retry &&<br/>attempts < 3| GetAuth
+    RouteAuth -->|authenticated<br/>= true| END2([END])
+    RouteAuth -->|authenticated<br/>= false| END3([END])
+    
+    style START fill:#22c55e,stroke:#16a34a,color:#fff
+    style END1 fill:#ef4444,stroke:#dc2626,color:#fff
+    style END2 fill:#ef4444,stroke:#dc2626,color:#fff
+    style END3 fill:#ef4444,stroke:#dc2626,color:#fff
+    
+    style GetConsent fill:#2563eb,stroke:#1d4ed8,color:#fff
+    style GetAuth fill:#2563eb,stroke:#1d4ed8,color:#fff
+    
+    style ProcessConsent fill:#9333ea,stroke:#7e22ce,color:#fff
+    style ProcessAuth fill:#9333ea,stroke:#7e22ce,color:#fff
+    
+    style RouteConsent fill:#ca8a04,stroke:#a16207,color:#fff
+    style RouteAuth fill:#ca8a04,stroke:#a16207,color:#fff

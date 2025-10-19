@@ -31,11 +31,15 @@ CHROMADB_DIRECTORY = "./chroma_langchain_db"
 """
 Initialisation of LLM, Embeddings and Vector Store
 """
+# VARIATION 1 without format in llm initialisation
 llm = ChatOllama(
-    model=MODEL, temperature=0, base_url="http://localhost:11434", format="json"
+    model=MODEL, temperature=0, base_url="http://localhost:11434"
 )
-# embeddings = OllamaEmbeddings(model=MODEL)
-# vector_store = Chroma(collection_name = "example_collection", embedding_function= embeddings, persist_directory= CHROMADB_DIRECTORY)
+
+# # VARIATION 2 with format in llm initialisation
+# llm = ChatOllama(
+#     model=MODEL, temperature=0, base_url="http://localhost:11434", format="json"
+# )
 
 class SystemPrompts(Enum):
     PROCESS_CONSENT = (
@@ -46,13 +50,21 @@ class SystemPrompts(Enum):
             )
 
 class AIMessages(Enum):
-    ASK_CONSENT = (
+    CONSENT_QUESTION = (
                 "Hello! Before we begin the verification process, I need your consent. "
                 "This conversation will be recorded for compliance purposes. "
                 "Do you agree to proceed? (Please say yes or no)"
             )
     POSITIVE_CONSENT_RESPONSE = ("Thank you for your consent. Let's proceed with the verification.")
     NEGATIVE_CONSENT_RESPONSE = ("I understand you did not consent. Goodbye.")
+
+    AUTHENTICATION_QUESTION = (
+            "For security purposes, please provide:\n"
+            "1. Your date of birth (DD/MM/YYYY)\n"
+            "2. Last 4 digits of your Aadhar card"
+        )
+    POSITIVE_AUTHENTICATION_RESPONSE = ("Thank you for your authentication. Let's proceed with the verification.")
+    NEGATIVE_AUTHENTICATION_RESPONSE = ("I am sorry we could not authenticate. Goodbye.")
 
 
 SYSTEM_PROMPT = "You are a calling agent on behalf of credit underwriter, please interpret the answers given by loan applicant and collect relevant data"
@@ -116,6 +128,7 @@ class AgentState(TypedDict):
     extracted_data: dict
     repeat_count: dict
     extraction_status: str
+    should_retry: bool
 
     # # Compliance
     # conversation_transcript: list
@@ -125,6 +138,7 @@ class ConsentResult(BaseModel):
     consent_given: bool = Field(..., description="Whether consent was given")
     confidence: int = Field(..., description="Confidence level of consent interpretation (0-100)", ge=0, le=100)
     reasoning: str = Field(..., description="Brief explanation of the consent interpretation")
+    should_retry: bool = Field(..., description="Whether to retry asking for consent because of ambiguity")
 
 class AuthenticationResult(BaseModel):
     """Analysis of user authentication from text."""
@@ -134,6 +148,7 @@ class AuthenticationResult(BaseModel):
     confidence_aadhaar: int = Field(..., description="Confidence level of Aadhaar interpretation (0-100)", ge=0, le=100)
     reasoning_date_of_birth: str = Field(..., description="Brief explanation of the date of birth interpretation")
     reasoning_aadhaar: str = Field(..., description="Brief explanation of the Aadhaar interpretation")
+    should_retry: bool = Field(..., description="Whether to retry asking for authentication because of ambiguity")
 
 def model_call(state: AgentState) -> AgentState:
     system_prompt = SystemMessage(content=SYSTEM_PROMPT)
@@ -141,13 +156,12 @@ def model_call(state: AgentState) -> AgentState:
     return {"messages": [response]}
 
 
-def get_consent_node(state: AgentState) -> AgentState:
+def get_consent_node(state: AgentState) -> dict:
     print("==== Get Consent Runnable ===")
     if not state.get("consent_asked", False):
-        message = AIMessage(content= AIMessages.ASK_CONSENT.value)
-        state["messages"] = [message]
-        state["consent_asked"] = True
-    return state
+        message = AIMessage(content= AIMessages.CONSENT_QUESTION.value)
+        ret_dict = {"messages": [message], "consent_asked": True}
+    return ret_dict
 
 
 def process_consent_node(state: AgentState) -> AgentState:
@@ -163,8 +177,11 @@ def process_consent_node(state: AgentState) -> AgentState:
     consent_check_messages = [SystemMessage(content=SystemPrompts.PROCESS_CONSENT.value),human_message,]
 
     # Get LLM interpretation
-    llm_output = llm.with_structured_output(ConsentResult).ainvoke(consent_check_messages,config={"format":"json"})
-    #TODO VARIATION 2 llm_output = llm.with_structured_output(ConsentResult).ainvoke(consent_check_messages)
+
+    #TODO VARIATION 1 
+    # llm_output = llm.with_structured_output(ConsentResult).ainvoke(consent_check_messages,config={"format":"json"})
+    #VARIATION 2 RECOMMENDED AS PER LANGGRAPH DOCS 
+    llm_output = llm.with_structured_output(ConsentResult).ainvoke(consent_check_messages)
 
     # Parse the JSON response
     try:
@@ -201,21 +218,14 @@ def process_consent_node(state: AgentState) -> AgentState:
     return state
 
 
-# def get_authentication_node(state: AgentState)-> AgentState:
-#     print("==== Get Authentication Runnable ===")
-#     message = AIMessage(
-#         content=(
-#             "For security purposes, please provide:\n"
-#             "1. Your date of birth (DD/MM/YYYY)\n"
-#             "2. Last 4 digits of your Aadhar card"
-#         )
-#     )
-#     state["conversation_transcript"].append(
-#         {"role": "assistant", "content": message.content}
-#     )
-#     state["auth_question_asked"] = True
-
-#     return state
+def get_authentication_node(state: AgentState)-> AgentState:
+    print("==== Get Authentication Runnable ===")
+    message = AIMessage(
+        content=AIMessages.AUTHENTICATION_QUESTION.value
+    )
+    state["auth_question_asked"] = True
+    state["messages"] = [message]
+    return state
 
 # def process_authentication_node(state: AgentState)-> AgentState:
 #     state["auth_attempts"] += 1
