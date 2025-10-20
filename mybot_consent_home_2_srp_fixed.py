@@ -4,7 +4,7 @@ from langchain_ollama import ChatOllama
 from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, AIMessage
 from langgraph.graph.message import add_messages
 from typing import Annotated, Sequence, TypedDict, Literal
-from langgraph.types import interrupt
+from langgraph.types import Command, interrupt
 from pydantic import BaseModel, Field
 from enum import Enum
 
@@ -416,7 +416,7 @@ app = workflow.compile(checkpointer=checkpointer)
 
 
 # ============================================================================
-# EXECUTION - Cleaner Loop
+# EXECUTION - Cleaner Loop (FIXED)
 # ============================================================================
 
 
@@ -476,8 +476,10 @@ def run_conversation():
             print("Please enter a response.")
             continue
 
-        # Resume with user input
-        for event in app.stream(None, config, stream_mode="values", input=user_input):
+        # FIX: Resume with user input using Command
+        for event in app.stream(
+            Command(resume=user_input), config, stream_mode="values"
+        ):
             if "messages" in event and event["messages"]:
                 last_msg = event["messages"][-1]
                 if isinstance(last_msg, AIMessage):

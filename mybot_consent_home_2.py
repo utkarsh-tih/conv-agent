@@ -25,11 +25,7 @@ CHROMADB_DIRECTORY = "./chroma_langchain_db"
 """
 Initialisation of LLM
 """
-llm = ChatOllama(
-    model=MODEL, 
-    temperature=0, 
-    base_url="http://localhost:11434"
-)
+llm = ChatOllama(model=MODEL, temperature=0, base_url="http://localhost:11434")
 
 
 class SystemPrompts(Enum):
@@ -53,16 +49,22 @@ class AIMessages(Enum):
         "This conversation will be recorded for compliance purposes. "
         "Do you agree to proceed? (Please say yes or no)"
     )
-    POSITIVE_CONSENT_RESPONSE = "Thank you for your consent. Let's proceed with the verification."
+    POSITIVE_CONSENT_RESPONSE = (
+        "Thank you for your consent. Let's proceed with the verification."
+    )
     NEGATIVE_CONSENT_RESPONSE = "I understand you did not consent. Goodbye."
-    CONSENT_RETRY = "I didn't quite understand. Could you please clearly say 'yes' or 'no'?"
-    
+    CONSENT_RETRY = (
+        "I didn't quite understand. Could you please clearly say 'yes' or 'no'?"
+    )
+
     AUTHENTICATION_QUESTION = (
         "For security purposes, please provide:\n"
         "1. Your date of birth (DD/MM/YYYY)\n"
         "2. Last 4 digits of your Aadhar card"
     )
-    POSITIVE_AUTHENTICATION_RESPONSE = "Thank you for your authentication. Let's proceed with the verification."
+    POSITIVE_AUTHENTICATION_RESPONSE = (
+        "Thank you for your authentication. Let's proceed with the verification."
+    )
     NEGATIVE_AUTHENTICATION_RESPONSE = "I am sorry we could not authenticate. Goodbye."
     AUTHENTICATION_RETRY = "I couldn't capture all the details. Please provide both your date of birth and last 4 digits of Aadhaar again."
 
@@ -98,6 +100,7 @@ class AgentState(TypedDict):
     """
     State schema using TypedDict for explicit type definitions.
     """
+
     # Messages with proper reducer
     messages: Annotated[Sequence[BaseMessage], add_messages]
 
@@ -110,7 +113,7 @@ class AgentState(TypedDict):
     consent_confidence: int
     consent_reasoning: str
     consent_retry_count: int
-    
+
     auth_question_asked: bool
     authenticated: bool
     auth_attempts: int
@@ -130,45 +133,76 @@ class AgentState(TypedDict):
 
 class ConsentResult(BaseModel):
     """Analysis of user consent from text."""
+
     consent_given: bool = Field(..., description="Whether consent was given")
-    confidence: int = Field(..., description="Confidence level of consent interpretation (0-100)", ge=0, le=100)
-    reasoning: str = Field(..., description="Brief explanation of the consent interpretation")
-    should_retry: bool = Field(..., description="Whether to retry asking for consent because of ambiguity")
+    confidence: int = Field(
+        ...,
+        description="Confidence level of consent interpretation (0-100)",
+        ge=0,
+        le=100,
+    )
+    reasoning: str = Field(
+        ..., description="Brief explanation of the consent interpretation"
+    )
+    should_retry: bool = Field(
+        ..., description="Whether to retry asking for consent because of ambiguity"
+    )
 
 
 class AuthenticationResult(BaseModel):
     """Analysis of user authentication from text."""
-    date_of_birth: str = Field(..., description="User's date of birth in DD/MM/YYYY format")
+
+    date_of_birth: str = Field(
+        ..., description="User's date of birth in DD/MM/YYYY format"
+    )
     aadhaar_last4: str = Field(..., description="Last 4 digits of user's Aadhaar card")
-    confidence_date_of_birth: int = Field(..., description="Confidence level of date of birth interpretation (0-100)", ge=0, le=100)
-    confidence_aadhaar: int = Field(..., description="Confidence level of Aadhaar interpretation (0-100)", ge=0, le=100)
-    reasoning_date_of_birth: str = Field(..., description="Brief explanation of the date of birth interpretation")
-    reasoning_aadhaar: str = Field(..., description="Brief explanation of the Aadhaar interpretation")
-    should_retry: bool = Field(..., description="Whether to retry asking for authentication because of ambiguity")
+    confidence_date_of_birth: int = Field(
+        ...,
+        description="Confidence level of date of birth interpretation (0-100)",
+        ge=0,
+        le=100,
+    )
+    confidence_aadhaar: int = Field(
+        ...,
+        description="Confidence level of Aadhaar interpretation (0-100)",
+        ge=0,
+        le=100,
+    )
+    reasoning_date_of_birth: str = Field(
+        ..., description="Brief explanation of the date of birth interpretation"
+    )
+    reasoning_aadhaar: str = Field(
+        ..., description="Brief explanation of the Aadhaar interpretation"
+    )
+    should_retry: bool = Field(
+        ...,
+        description="Whether to retry asking for authentication because of ambiguity",
+    )
 
 
 # ============================================================================
 # NODES
 # ============================================================================
 
+
 def get_consent_node(state: AgentState) -> dict:
     """Ask for consent if not already asked."""
     print("\n==== Get Consent Node ===")
-    
+
     if not state.get("consent_asked", False):
         return {
             "messages": [AIMessage(content=AIMessages.CONSENT_QUESTION.value)],
             "consent_asked": True,
-            "stage": "consent"
+            "stage": "consent",
         }
-    
+
     # If consent already asked, check if retry is needed
     if state.get("should_retry", False) and state.get("consent_retry_count", 0) < 3:
         return {
             "messages": [AIMessage(content=AIMessages.CONSENT_RETRY.value)],
-            "consent_retry_count": state.get("consent_retry_count", 0) + 1
+            "consent_retry_count": state.get("consent_retry_count", 0) + 1,
         }
-    
+
     return {}
 
 
@@ -187,7 +221,9 @@ def process_consent_node(state: AgentState) -> dict:
     ]
 
     # Get structured output (returns ConsentResult object)
-    llm_output = llm.with_structured_output(ConsentResult).invoke(consent_check_messages)
+    llm_output = llm.with_structured_output(ConsentResult).invoke(
+        consent_check_messages
+    )
 
     # Access fields directly (it's already a Pydantic object)
     consent_given = llm_output.consent_given
@@ -195,7 +231,9 @@ def process_consent_node(state: AgentState) -> dict:
     reasoning = llm_output.reasoning
     should_retry = llm_output.should_retry
 
-    print(f"Consent Analysis: given={consent_given}, confidence={confidence}, retry={should_retry}")
+    print(
+        f"Consent Analysis: given={consent_given}, confidence={confidence}, retry={should_retry}"
+    )
 
     # Determine response message
     if should_retry and state.get("consent_retry_count", 0) < 3:
@@ -215,28 +253,28 @@ def process_consent_node(state: AgentState) -> dict:
         "consent_confidence": confidence,
         "consent_reasoning": reasoning,
         "should_retry": should_retry,
-        "stage": next_stage
+        "stage": next_stage,
     }
 
 
 def get_authentication_node(state: AgentState) -> dict:
     """Ask for authentication details."""
     print("\n==== Get Authentication Node ===")
-    
+
     if not state.get("auth_question_asked", False):
         return {
             "messages": [AIMessage(content=AIMessages.AUTHENTICATION_QUESTION.value)],
             "auth_question_asked": True,
-            "stage": "authenticate"
+            "stage": "authenticate",
         }
-    
+
     # If authentication already asked, check if retry is needed
     if state.get("should_retry", False) and state.get("auth_attempts", 0) < 3:
         return {
             "messages": [AIMessage(content=AIMessages.AUTHENTICATION_RETRY.value)],
-            "auth_attempts": state.get("auth_attempts", 0) + 1
+            "auth_attempts": state.get("auth_attempts", 0) + 1,
         }
-    
+
     return {}
 
 
@@ -255,7 +293,9 @@ def process_authentication_node(state: AgentState) -> dict:
     ]
 
     # Get structured output
-    llm_output = llm.with_structured_output(AuthenticationResult).invoke(auth_check_messages)
+    llm_output = llm.with_structured_output(AuthenticationResult).invoke(
+        auth_check_messages
+    )
 
     # Access fields directly
     date_of_birth = llm_output.date_of_birth
@@ -264,7 +304,9 @@ def process_authentication_node(state: AgentState) -> dict:
     confidence_aadhaar = llm_output.confidence_aadhaar
     should_retry = llm_output.should_retry
 
-    print(f"Auth Analysis: DOB={date_of_birth}, Aadhaar={aadhaar_last4}, retry={should_retry}")
+    print(
+        f"Auth Analysis: DOB={date_of_birth}, Aadhaar={aadhaar_last4}, retry={should_retry}"
+    )
 
     # Determine response
     if should_retry and state.get("auth_attempts", 0) < 3:
@@ -272,11 +314,15 @@ def process_authentication_node(state: AgentState) -> dict:
         authenticated = False
         next_stage = "authenticate"
     elif confidence_dob > 70 and confidence_aadhaar > 70:
-        ai_response = AIMessage(content=AIMessages.POSITIVE_AUTHENTICATION_RESPONSE.value)
+        ai_response = AIMessage(
+            content=AIMessages.POSITIVE_AUTHENTICATION_RESPONSE.value
+        )
         authenticated = True
         next_stage = "questions"
     else:
-        ai_response = AIMessage(content=AIMessages.NEGATIVE_AUTHENTICATION_RESPONSE.value)
+        ai_response = AIMessage(
+            content=AIMessages.NEGATIVE_AUTHENTICATION_RESPONSE.value
+        )
         authenticated = False
         next_stage = "complete"
 
@@ -286,13 +332,14 @@ def process_authentication_node(state: AgentState) -> dict:
         "user_dob": date_of_birth,
         "user_aadhar_digits": aadhaar_last4,
         "should_retry": should_retry,
-        "stage": next_stage
+        "stage": next_stage,
     }
 
 
 # ============================================================================
 # CONDITIONAL EDGES
 # ============================================================================
+
 
 def route_after_consent(state: AgentState) -> str:
     """Route based on consent result."""
@@ -335,17 +382,14 @@ workflow.add_conditional_edges(
     {
         "get_consent": "get_consent",
         "get_authentication": "get_authentication",
-        "end": END
-    }
+        "end": END,
+    },
 )
 workflow.add_edge("get_authentication", "process_authentication")
 workflow.add_conditional_edges(
     "process_authentication",
     route_after_authentication,
-    {
-        "get_authentication": "get_authentication",
-        "end": END
-    }
+    {"get_authentication": "get_authentication", "end": END},
 )
 
 # Compile with checkpointer
@@ -357,9 +401,10 @@ app = workflow.compile(checkpointer=checkpointer)
 # EXECUTION
 # ============================================================================
 
+
 def run_conversation():
     """Run the conversation with human-in-the-loop."""
-    
+
     # Initial state
     initial_state = {
         "messages": [],
@@ -379,15 +424,15 @@ def run_conversation():
         "extracted_data": {},
         "repeat_count": {},
         "extraction_status": "",
-        "should_retry": False
+        "should_retry": False,
     }
-    
+
     config = {"configurable": {"thread_id": "conversation-1"}}
-    
+
     print("=" * 70)
     print("STARTING CONVERSATION")
     print("=" * 70)
-    
+
     # Start conversation
     for chunk in app.stream(initial_state, config):
         if "__interrupt__" in chunk:
@@ -397,16 +442,16 @@ def run_conversation():
             print(f"\nAI: {last_message.content}")
             print(f"[Interrupt: {chunk['__interrupt__'][0].value}]")
             break
-    
+
     # Main conversation loop
     while True:
         # Get user input
         user_input = input("\nYou: ").strip()
-        
+
         if not user_input:
             print("Please enter a response.")
             continue
-        
+
         # Resume with user input
         result = None
         for chunk in app.stream(Command(resume=user_input), config):
@@ -419,7 +464,7 @@ def run_conversation():
                 break
             else:
                 result = chunk
-        
+
         # Check if conversation is complete
         if result:
             state = app.get_state(config)
@@ -429,7 +474,7 @@ def run_conversation():
                 print("=" * 70)
                 print(f"Consent given: {state.values['consent_given']}")
                 print(f"Authenticated: {state.values['authenticated']}")
-                if state.values['authenticated']:
+                if state.values["authenticated"]:
                     print(f"DOB: {state.values['user_dob']}")
                     print(f"Aadhaar last 4: {state.values['user_aadhar_digits']}")
                 break

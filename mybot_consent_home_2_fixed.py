@@ -1,13 +1,17 @@
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import START, END, StateGraph
 from langchain_ollama import ChatOllama
-from langchain_core.messages import BaseMessage, HumanMessage, SystemMessage, AIMessage
+from langchain_core.messages import (
+    BaseMessage,
+    HumanMessage,
+    SystemMessage,
+    AIMessage,
+)
 from langgraph.graph.message import add_messages
 from typing import Annotated, Sequence, TypedDict, Literal
-from langgraph.types import interrupt
+from langgraph.types import Command, interrupt
 from pydantic import BaseModel, Field
 from enum import Enum
-
 
 NODES = Literal[
     "get_consent_node",
@@ -93,26 +97,38 @@ class Questions(Enum):
 
 
 class AgentState(TypedDict):
+    """
+    State schema using TypedDict for explicit type definitions.
+    """
+
+    # Messages with proper reducer
     messages: Annotated[Sequence[BaseMessage], add_messages]
+
+    # Flow control - tracks which stage we're at
     stage: Literal["consent", "authenticate", "questions", "complete"]
 
-    # Consent tracking
+    # Authentication & Consent
+    consent_asked: bool
     consent_given: bool
     consent_confidence: int
     consent_reasoning: str
     consent_retry_count: int
 
-    # Authentication tracking
+    auth_question_asked: bool
     authenticated: bool
     auth_attempts: int
     user_dob: str
     user_aadhar_digits: str
 
-    # Question flow
+    # Question Flow
     current_question: int
     questions_asked: list[int]
+
+    # Extraction & Retries
     extracted_data: dict
     repeat_count: dict
+    extraction_status: str
+    should_retry: bool
 
 
 class ConsentResult(BaseModel):
@@ -165,47 +181,52 @@ class AuthenticationResult(BaseModel):
 
 
 # ============================================================================
-# REFACTORED NODES - Interrupt at Beginning
+# NODES
 # ============================================================================
 
 
-def ask_consent_node(state: AgentState) -> dict:
-    """
-    Ask for consent. This node always runs and outputs the question.
-    No interrupt here - just prepares the question.
-    """
-    print("\n==== Ask Consent Node ===")
+def get_consent_node(state: AgentState) -> dict:
+    """Ask for consent if not already asked."""
+    print("\n==== Get Consent Node ===")
 
-    # Determine which message to send
-    if state.get("consent_retry_count", 0) > 0:
-        message = AIMessages.CONSENT_RETRY.value
-    else:
-        message = AIMessages.CONSENT_QUESTION.value
+    if not state.get("consent_asked", False):
+        return {
+            "messages": [AIMessage(content=AIMessages.CONSENT_QUESTION.value)],
+            "consent_asked": True,
+            "stage": "consent",
+        }
 
-    return {"messages": [AIMessage(content=message)], "stage": "consent"}
+    # FIX: If consent already asked and retry is needed, ask retry question
+    # Removed duplicate logic - retry message now only sent from here
+    if state.get("should_retry", False) and state.get("consent_retry_count", 0) < 3:
+        return {
+            "messages": [AIMessage(content=AIMessages.CONSENT_RETRY.value)],
+            "stage": "consent",
+        }
+
+    return {}
 
 
 def process_consent_node(state: AgentState) -> dict:
-    """
-    Process consent response. Interrupt at the BEGINNING to get user input.
-    """
+    """Process user's consent response."""
     print("\n==== Process Consent Node ===")
 
-    # ✅ INTERRUPT FIRST - before any processing
+    # Wait for human input (this pauses execution)
     consent_human_input = interrupt("waiting_for_consent")
-
-    # Now process the input (only executes after resume)
     print(f"Received input: {consent_human_input}")
 
+    # Create messages for LLM to interpret consent
     consent_check_messages = [
         SystemMessage(content=SystemPrompts.PROCESS_CONSENT.value),
         HumanMessage(content=consent_human_input),
     ]
 
+    # Get structured output (returns ConsentResult object)
     llm_output = llm.with_structured_output(ConsentResult).invoke(
         consent_check_messages
     )
 
+    # Access fields directly (it's already a Pydantic object)
     consent_given = llm_output.consent_given
     confidence = llm_output.confidence
     reasoning = llm_output.reasoning
@@ -215,78 +236,81 @@ def process_consent_node(state: AgentState) -> dict:
         f"Consent Analysis: given={consent_given}, confidence={confidence}, retry={should_retry}"
     )
 
-    # Determine next stage based on result
+    # FIX: Determine response message - don't send retry message here
+    # Let get_consent_node handle retry messages
+    messages_to_add = [HumanMessage(content=consent_human_input)]
+
     if should_retry and state.get("consent_retry_count", 0) < 3:
+        # Don't add AI response here - let get_consent_node handle it
         next_stage = "consent"
         retry_count = state.get("consent_retry_count", 0) + 1
     elif consent_given:
+        messages_to_add.append(
+            AIMessage(content=AIMessages.POSITIVE_CONSENT_RESPONSE.value)
+        )
         next_stage = "authenticate"
         retry_count = state.get("consent_retry_count", 0)
     else:
+        messages_to_add.append(
+            AIMessage(content=AIMessages.NEGATIVE_CONSENT_RESPONSE.value)
+        )
         next_stage = "complete"
         retry_count = state.get("consent_retry_count", 0)
 
+    # Return updates (don't mutate state)
     return {
-        "messages": [HumanMessage(content=consent_human_input)],
+        "messages": messages_to_add,
         "consent_given": consent_given,
         "consent_confidence": confidence,
         "consent_reasoning": reasoning,
+        "should_retry": should_retry,
         "consent_retry_count": retry_count,
         "stage": next_stage,
     }
 
 
-def respond_to_consent_node(state: AgentState) -> dict:
-    """
-    Generate appropriate response based on consent result.
-    """
-    print("\n==== Respond to Consent Node ===")
+def get_authentication_node(state: AgentState) -> dict:
+    """Ask for authentication details."""
+    print("\n==== Get Authentication Node ===")
 
-    if state.get("stage") == "authenticate":
-        message = AIMessages.POSITIVE_CONSENT_RESPONSE.value
-    elif state.get("stage") == "complete":
-        message = AIMessages.NEGATIVE_CONSENT_RESPONSE.value
-    else:
-        # Retry case - message already sent in ask_consent_node
-        return {}
+    if not state.get("auth_question_asked", False):
+        return {
+            "messages": [AIMessage(content=AIMessages.AUTHENTICATION_QUESTION.value)],
+            "auth_question_asked": True,
+            "stage": "authenticate",
+        }
 
-    return {"messages": [AIMessage(content=message)]}
+    # FIX: If authentication already asked and retry is needed, ask retry question
+    # Removed duplicate logic - retry message now only sent from here
+    if state.get("should_retry", False) and state.get("auth_attempts", 0) < 3:
+        return {
+            "messages": [AIMessage(content=AIMessages.AUTHENTICATION_RETRY.value)],
+            "stage": "authenticate",
+        }
 
-
-def ask_authentication_node(state: AgentState) -> dict:
-    """
-    Ask for authentication details.
-    """
-    print("\n==== Ask Authentication Node ===")
-
-    if state.get("auth_attempts", 0) > 0:
-        message = AIMessages.AUTHENTICATION_RETRY.value
-    else:
-        message = AIMessages.AUTHENTICATION_QUESTION.value
-
-    return {"messages": [AIMessage(content=message)], "stage": "authenticate"}
+    return {}
 
 
 def process_authentication_node(state: AgentState) -> dict:
-    """
-    Process authentication response. Interrupt at the BEGINNING.
-    """
+    """Process user's authentication response."""
     print("\n==== Process Authentication Node ===")
 
-    # ✅ INTERRUPT FIRST
+    # Wait for human input
     auth_human_input = interrupt("waiting_for_authentication")
-
     print(f"Received input: {auth_human_input}")
 
+    # Create messages for LLM to extract authentication details
     auth_check_messages = [
         SystemMessage(content=SystemPrompts.PROCESS_AUTHENTICATION.value),
         HumanMessage(content=auth_human_input),
     ]
 
+    # Get structured output
     llm_output = llm.with_structured_output(AuthenticationResult).invoke(
         auth_check_messages
     )
 
+    # Access fields directly
     date_of_birth = llm_output.date_of_birth
     aadhaar_last4 = llm_output.aadhaar_last4
     confidence_dob = llm_output.confidence_date_of_birth
@@ -297,139 +321,119 @@ def process_authentication_node(state: AgentState) -> dict:
         f"Auth Analysis: DOB={date_of_birth}, Aadhaar={aadhaar_last4}, retry={should_retry}"
     )
 
-    # Determine next stage
+    # FIX: Determine response - don't send retry message here
+    messages_to_add = [HumanMessage(content=auth_human_input)]
+
     if should_retry and state.get("auth_attempts", 0) < 3:
-        next_stage = "authenticate"
+        # Don't add AI response here - let get_authentication_node handle it
         authenticated = False
+        next_stage = "authenticate"
         attempts = state.get("auth_attempts", 0) + 1
     elif confidence_dob > 70 and confidence_aadhaar > 70:
-        next_stage = "questions"  # Or "complete" for now
+        messages_to_add.append(
+            AIMessage(content=AIMessages.POSITIVE_AUTHENTICATION_RESPONSE.value)
+        )
         authenticated = True
+        next_stage = "questions"
         attempts = state.get("auth_attempts", 0)
     else:
-        next_stage = "complete"
+        messages_to_add.append(
+            AIMessage(content=AIMessages.NEGATIVE_AUTHENTICATION_RESPONSE.value)
+        )
         authenticated = False
+        next_stage = "complete"
         attempts = state.get("auth_attempts", 0)
 
     return {
-        "messages": [HumanMessage(content=auth_human_input)],
+        "messages": messages_to_add,
         "authenticated": authenticated,
         "user_dob": date_of_birth,
         "user_aadhar_digits": aadhaar_last4,
+        "should_retry": should_retry,
         "auth_attempts": attempts,
         "stage": next_stage,
     }
 
 
-def respond_to_authentication_node(state: AgentState) -> dict:
-    """
-    Generate appropriate response based on authentication result.
-    """
-    print("\n==== Respond to Authentication Node ===")
-
-    if state.get("stage") == "questions":
-        message = AIMessages.POSITIVE_AUTHENTICATION_RESPONSE.value
-    elif state.get("stage") == "complete":
-        message = AIMessages.NEGATIVE_AUTHENTICATION_RESPONSE.value
-    else:
-        # Retry case - message already sent in ask_authentication_node
-        return {}
-
-    return {"messages": [AIMessage(content=message)]}
-
-
 # ============================================================================
-# CONDITIONAL EDGES - Simplified
+# CONDITIONAL EDGES
 # ============================================================================
 
 
 def route_after_consent(state: AgentState) -> str:
-    """Route based on consent stage."""
-    stage = state.get("stage", "consent")
-
-    if stage == "consent" and state.get("consent_retry_count", 0) < 3:
-        return "retry_consent"
-    elif stage == "authenticate":
-        return "proceed_to_auth"
+    """Route based on consent result."""
+    if state.get("should_retry", False) and state.get("consent_retry_count", 0) < 3:
+        return "get_consent"
+    elif state.get("consent_given", False):
+        return "get_authentication"
     else:
         return "end"
 
 
 def route_after_authentication(state: AgentState) -> str:
-    """Route based on authentication stage."""
-    stage = state.get("stage", "authenticate")
-
-    if stage == "authenticate" and state.get("auth_attempts", 0) < 3:
-        return "retry_auth"
-    elif stage == "questions":
-        return "proceed_to_questions"
+    """Route based on authentication result."""
+    if state.get("should_retry", False) and state.get("auth_attempts", 0) < 3:
+        return "get_authentication"
+    elif state.get("authenticated", False):
+        return "end"  # TODO: Change to questions node when implemented
     else:
         return "end"
 
 
 # ============================================================================
-# BUILD GRAPH - New Structure
+# BUILD GRAPH
 # ============================================================================
 
 workflow = StateGraph(AgentState)
 
-# Add consent nodes
-workflow.add_node("ask_consent", ask_consent_node)
+# Add nodes
+workflow.add_node("get_consent", get_consent_node)
 workflow.add_node("process_consent", process_consent_node)
-workflow.add_node("respond_to_consent", respond_to_consent_node)
-
-# Add authentication nodes
-workflow.add_node("ask_authentication", ask_authentication_node)
+workflow.add_node("get_authentication", get_authentication_node)
 workflow.add_node("process_authentication", process_authentication_node)
-workflow.add_node("respond_to_authentication", respond_to_authentication_node)
 
-# Consent flow
-workflow.add_edge(START, "ask_consent")
-workflow.add_edge("ask_consent", "process_consent")
+# Add edges
+workflow.add_edge(START, "get_consent")
+workflow.add_edge("get_consent", "process_consent")
 workflow.add_conditional_edges(
     "process_consent",
     route_after_consent,
     {
-        "retry_consent": "ask_consent",
-        "proceed_to_auth": "respond_to_consent",
+        "get_consent": "get_consent",
+        "get_authentication": "get_authentication",
         "end": END,
     },
 )
-workflow.add_edge("respond_to_consent", "ask_authentication")
-
-# Authentication flow
-workflow.add_edge("ask_authentication", "process_authentication")
+workflow.add_edge("get_authentication", "process_authentication")
 workflow.add_conditional_edges(
     "process_authentication",
     route_after_authentication,
-    {
-        "retry_auth": "ask_authentication",
-        "proceed_to_questions": "respond_to_authentication",
-        "end": END,
-    },
+    {"get_authentication": "get_authentication", "end": END},
 )
-workflow.add_edge("respond_to_authentication", END)  # TODO: Change to questions
 
-# Compile
+# Compile with checkpointer
 checkpointer = MemorySaver()
 app = workflow.compile(checkpointer=checkpointer)
 
 
 # ============================================================================
-# EXECUTION - Cleaner Loop
+# EXECUTION
 # ============================================================================
 
 
 def run_conversation():
     """Run the conversation with human-in-the-loop."""
 
+    # Initial state
     initial_state = {
         "messages": [],
         "stage": "consent",
+        "consent_asked": False,
         "consent_given": False,
         "consent_confidence": 0,
         "consent_reasoning": "",
         "consent_retry_count": 0,
+        "auth_question_asked": False,
         "authenticated": False,
         "auth_attempts": 0,
         "user_dob": "",
@@ -438,6 +442,8 @@ def run_conversation():
         "questions_asked": [],
         "extracted_data": {},
         "repeat_count": {},
+        "extraction_status": "",
+        "should_retry": False,
     }
 
     config = {"configurable": {"thread_id": "conversation-1"}}
@@ -446,29 +452,18 @@ def run_conversation():
     print("STARTING CONVERSATION")
     print("=" * 70)
 
-    # Initial run until first interrupt
-    for event in app.stream(initial_state, config, stream_mode="values"):
-        if "messages" in event and event["messages"]:
-            last_msg = event["messages"][-1]
-            if isinstance(last_msg, AIMessage):
-                print(f"\nAI: {last_msg.content}")
+    # Start conversation
+    for chunk in app.stream(initial_state, config):
+        if "__interrupt__" in chunk:
+            # Get current state to see AI's last message
+            state = app.get_state(config)
+            last_message = state.values["messages"][-1]
+            print(f"\nAI: {last_message.content}")
+            print(f"[Interrupt: {chunk['__interrupt__'][0].value}]")
+            break
 
     # Main conversation loop
     while True:
-        state = app.get_state(config)
-
-        # Check if conversation ended
-        if state.next == ():  # No more nodes to execute
-            print("\n" + "=" * 70)
-            print("CONVERSATION COMPLETE")
-            print("=" * 70)
-            print(f"Consent given: {state.values.get('consent_given')}")
-            print(f"Authenticated: {state.values.get('authenticated')}")
-            if state.values.get("authenticated"):
-                print(f"DOB: {state.values.get('user_dob')}")
-                print(f"Aadhaar last 4: {state.values.get('user_aadhar_digits')}")
-            break
-
         # Get user input
         user_input = input("\nYou: ").strip()
 
@@ -477,11 +472,31 @@ def run_conversation():
             continue
 
         # Resume with user input
-        for event in app.stream(None, config, stream_mode="values", input=user_input):
-            if "messages" in event and event["messages"]:
-                last_msg = event["messages"][-1]
-                if isinstance(last_msg, AIMessage):
-                    print(f"\nAI: {last_msg.content}")
+        result = None
+        for chunk in app.stream(Command(resume=user_input), config):
+            if "__interrupt__" in chunk:
+                # Another interrupt - get state and show AI message
+                state = app.get_state(config)
+                last_message = state.values["messages"][-1]
+                print(f"\nAI: {last_message.content}")
+                print(f"[Interrupt: {chunk['__interrupt__'][0].value}]")
+                break
+            else:
+                result = chunk
+
+        # Check if conversation is complete
+        if result:
+            state = app.get_state(config)
+            if state.values["stage"] == "complete":
+                print("\n" + "=" * 70)
+                print("CONVERSATION COMPLETE")
+                print("=" * 70)
+                print(f"Consent given: {state.values['consent_given']}")
+                print(f"Authenticated: {state.values['authenticated']}")
+                if state.values["authenticated"]:
+                    print(f"DOB: {state.values['user_dob']}")
+                    print(f"Aadhaar last 4: {state.values['user_aadhar_digits']}")
+                break
 
 
 if __name__ == "__main__":
