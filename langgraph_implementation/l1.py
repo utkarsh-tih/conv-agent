@@ -95,20 +95,52 @@ class AgentState(TypedDict):
 
 
 class ConsentResult(BaseModel):
+    """Analysis of user consent from text."""
+
     consent_given: bool = Field(..., description="Whether consent was given")
-    confidence: int = Field(..., ge=0, le=100)
-    reasoning: str = Field(...)
-    should_retry: bool = Field(...)
+    confidence: int = Field(
+        ...,
+        description="Confidence level of consent interpretation (0-100)",
+        ge=0,
+        le=100,
+    )
+    reasoning: str = Field(
+        ..., description="Brief explanation of the consent interpretation"
+    )
+    should_retry: bool = Field(
+        ..., description="Whether to retry asking for consent because of ambiguity"
+    )
 
 
 class AuthenticationResult(BaseModel):
-    date_of_birth: str = Field(...)
-    aadhaar_last4: str = Field(...)
-    confidence_date_of_birth: int = Field(..., ge=0, le=100)
-    confidence_aadhaar: int = Field(..., ge=0, le=100)
-    reasoning_date_of_birth: str = Field(...)
-    reasoning_aadhaar: str = Field(...)
-    should_retry: bool = Field(...)
+    """Analysis of user authentication from text."""
+
+    date_of_birth: str = Field(
+        ..., description="User's date of birth in DD/MM/YYYY format"
+    )
+    aadhaar_last4: str = Field(..., description="Last 4 digits of user's Aadhaar card")
+    confidence_date_of_birth: int = Field(
+        ...,
+        description="Confidence level of date of birth interpretation (0-100)",
+        ge=0,
+        le=100,
+    )
+    confidence_aadhaar: int = Field(
+        ...,
+        description="Confidence level of Aadhaar interpretation (0-100)",
+        ge=0,
+        le=100,
+    )
+    reasoning_date_of_birth: str = Field(
+        ..., description="Brief explanation of the date of birth interpretation"
+    )
+    reasoning_aadhaar: str = Field(
+        ..., description="Brief explanation of the Aadhaar interpretation"
+    )
+    should_retry: bool = Field(
+        ...,
+        description="Whether to retry asking for authentication because of ambiguity",
+    )
 
 
 # ============================================================================
