@@ -595,7 +595,7 @@ workflow.add_edge("handle_system_error", END)
 checkpointer = MemorySaver()
 app = workflow.compile(checkpointer=checkpointer)
 
-
+print(app.get_graph().draw_mermaid())
 # ============================================================================
 # EXECUTION
 # ============================================================================
