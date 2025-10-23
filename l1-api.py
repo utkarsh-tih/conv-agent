@@ -22,7 +22,7 @@ MAX_RETRIES = 3  # For user ambiguity retries
 # --- LLM Initialization ---
 # llm = ChatOllama(model=MODEL, temperature=0, base_url=BASE_URL)
 from langchain_google_genai import ChatGoogleGenerativeAI
-os.environ["GOOGLE_API_KEY"] = "AIzaSyCEBlfBBLJhRZ47mGtmwSwXmnFNnJmVzPM"
+os.environ["GOOGLE_API_KEY"] = "AIzaSyCEBlfBBLJh"
 llm = ChatGoogleGenerativeAI(
     model="gemini-2.5-flash",
     temperature=0,
