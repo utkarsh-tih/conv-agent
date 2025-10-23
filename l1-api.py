@@ -15,7 +15,7 @@ from enum import Enum
 import os
 
 # --- Constants ---
-MAX_RETRIES = 3
+MAX_RETRIES = 3 # For user ambiguity retries
 SYSTEM_RETRIES = 3  # For LLM/system errors
 
 # --- Configuration ---
