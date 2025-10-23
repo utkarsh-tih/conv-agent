@@ -22,7 +22,7 @@ SYSTEM_RETRIES = 3  # For LLM/system errors
 # LOCAL LLM SETUP (Ollama)
 MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:1b")
 BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-MAX_RETRIES = 3  # For user ambiguity retries
+
 
 # --- LLM Initialization ---
 llm = ChatOllama(model=MODEL, temperature=0, base_url=BASE_URL)
