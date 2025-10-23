@@ -14,26 +14,22 @@ from langgraph.types import RetryPolicy
 from enum import Enum
 import os
 
-# --- Constants ---
-MAX_RETRIES = 3
-SYSTEM_RETRIES = 3  # For LLM/system errors
-
 # --- Configuration ---
-# LOCAL LLM SETUP (Ollama)
-MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:1b")
-BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
-llm = ChatOllama(model=MODEL, temperature=0, base_url=BASE_URL)
+# MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:1b")
+# BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+MAX_RETRIES = 3  # For user ambiguity retries
 
-# # --- LLM Initialization ---
-# from langchain_google_genai import ChatGoogleGenerativeAI
-# os.environ["GOOGLE_API_KEY"] = "AIzaSyCEBlfBBLJhRZ47mGtmwSwXmnFNnJmVzPM"
-# llm = ChatGoogleGenerativeAI(
-#     model="gemini-2.5-flash",
-#     temperature=0,
-#     max_tokens=None,
-#     timeout=None,
-#     max_retries=2,
-# )
+# --- LLM Initialization ---
+# llm = ChatOllama(model=MODEL, temperature=0, base_url=BASE_URL)
+from langchain_google_genai import ChatGoogleGenerativeAI
+os.environ["GOOGLE_API_KEY"] = "AIzaSyCEBlfBBLJh"
+llm = ChatGoogleGenerativeAI(
+    model="gemini-2.5-flash",
+    temperature=0,
+    max_tokens=None,
+    timeout=None,
+    max_retries=2,
+)
 
 # --- Enums ---
 class SystemPrompts(Enum):
