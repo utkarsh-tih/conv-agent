@@ -15,8 +15,15 @@ from enum import Enum
 import os
 
 # --- Constants ---
-MAX_RETRIES = 3
-SYSTEM_RETRIES = 3
+MAX_RETRIES = 3  # For user ambiguity retries
+SYSTEM_RETRIES = 3  # For LLM/system errors
+
+# # --- Configuration ---
+# MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:1b")
+# BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
+
+# # --- LLM Initialization ---
+# llm = ChatOllama(model=MODEL, temperature=0, base_url=BASE_URL)
 
 from langchain_google_genai import ChatGoogleGenerativeAI
 os.environ["GOOGLE_API_KEY"] = "AIzaSyCEBlfBBLJhRZ47mGtmwSwXmnFNnJmVzPM"
@@ -127,27 +134,60 @@ class AgentState(TypedDict):
 
 
 class ConsentResult(BaseModel):
+    """Analysis of user consent from text."""
+
     consent_given: bool = Field(..., description="Whether consent was given")
-    confidence: int = Field(..., description="Confidence level (0-100)", ge=0, le=100)
-    reasoning: str = Field(..., description="Brief explanation")
-    should_retry: bool = Field(..., description="Whether to retry due to ambiguity")
+    confidence: int = Field(
+        ...,
+        description="Confidence level of consent interpretation (0-100)",
+        ge=0,
+        le=100,
+    )
+    reasoning: str = Field(
+        ..., description="Brief explanation of the consent interpretation"
+    )
+    should_retry: bool = Field(
+        ..., description="Whether to retry asking for consent because of ambiguity"
+    )
 
 
 class AuthenticationResult(BaseModel):
-    date_of_birth: str = Field(..., description="Date of birth in DD/MM/YYYY format")
-    aadhaar_last4: str = Field(..., description="Last 4 digits of Aadhaar")
-    confidence_date_of_birth: int = Field(..., description="Confidence level (0-100)", ge=0, le=100)
-    confidence_aadhaar: int = Field(..., description="Confidence level (0-100)", ge=0, le=100)
-    reasoning_date_of_birth: str = Field(..., description="DOB reasoning")
-    reasoning_aadhaar: str = Field(..., description="Aadhaar reasoning")
-    should_retry: bool = Field(..., description="Whether to retry due to ambiguity")
+    """Analysis of user authentication from text."""
+
+    date_of_birth: str = Field(
+        ..., description="User's date of birth in DD/MM/YYYY format"
+    )
+    aadhaar_last4: str = Field(..., description="Last 4 digits of user's Aadhaar card")
+    confidence_date_of_birth: int = Field(
+        ...,
+        description="Confidence level of date of birth interpretation (0-100)",
+        ge=0,
+        le=100,
+    )
+    confidence_aadhaar: int = Field(
+        ...,
+        description="Confidence level of Aadhaar interpretation (0-100)",
+        ge=0,
+        le=100,
+    )
+    reasoning_date_of_birth: str = Field(
+        ..., description="Brief explanation of the date of birth interpretation"
+    )
+    reasoning_aadhaar: str = Field(
+        ..., description="Brief explanation of the Aadhaar interpretation"
+    )
+    should_retry: bool = Field(
+        ...,
+        description="Whether to retry asking for authentication because of ambiguity",
+    )
 
 
 class QuestionResult(BaseModel):
-    answer: str = Field(..., description="Extracted answer")
+    """Analysis of user's answer to a question."""
+    answer: str = Field(..., description="Extracted answer from user response")
     confidence: int = Field(..., description="Confidence level (0-100)", ge=0, le=100)
-    reasoning: str = Field(..., description="Reasoning")
-    should_retry: bool = Field(..., description="Whether answer is ambiguous")
+    reasoning: str = Field(..., description="Why this confidence level")
+    should_retry: bool = Field(..., description="Whether answer is too ambiguous")
     is_complete: bool = Field(..., description="Whether answer addresses the question")
 
 
@@ -247,6 +287,14 @@ def process_authentication_node(state: AgentState) -> dict:
 
     llm_output = llm.with_structured_output(AuthenticationResult).invoke(auth_check_messages)
 
+    print(f"DEBUG - DOB: {llm_output.date_of_birth}, Confidence: {llm_output.confidence_date_of_birth}")
+    print(f"DEBUG - Aadhaar: {llm_output.aadhaar_last4}, Confidence: {llm_output.confidence_aadhaar}")
+    print(f"DEBUG - Reasoning DOB: {llm_output.reasoning_date_of_birth}")
+    print(f"DEBUG - Reasoning Aadhaar: {llm_output.reasoning_aadhaar}")
+    print(f"DEBUG - Should retry: {llm_output.should_retry}")
+
+
+    should_retry = llm_output.should_retry
     authenticated = (
         llm_output.confidence_date_of_birth > 10 and 
         llm_output.confidence_aadhaar > 10 and
@@ -298,9 +346,11 @@ def ask_question_node(state: AgentState) -> dict:
     current_idx = state.get("current_question_index", 0)
     retry_count = state.get("question_retry_count", 0)
     
+    # Get current question
     question_data = VERIFICATION_QUESTIONS[current_idx]
     question_text = question_data["question"]
     
+    # Add retry message if this is a retry
     if retry_count > 0:
         message = f"{AIMessages.QUESTION_RETRY.value}\n\n{question_text}"
     else:
@@ -322,9 +372,11 @@ def process_question_node(state: AgentState) -> dict:
     retry_count = state.get("question_retry_count", 0)
     question_data = VERIFICATION_QUESTIONS[current_idx]
     
+    # Get user input
     user_answer = interrupt("waiting_for_question_answer")
     print(f"Received answer: {user_answer}")
     
+    # Build validation prompt with question context
     question_prompt = SystemPrompts.PROCESS_QUESTION.value.format(
         question=question_data["question"]
     )
@@ -335,6 +387,7 @@ def process_question_node(state: AgentState) -> dict:
         HumanMessage(content=user_answer),
     ]
     
+    # Get LLM validation (will auto-retry on ValidationError)
     llm_output = llm.with_structured_output(QuestionResult).invoke(validation_messages)
     print(f"DEBUG - {llm_output}")
 
@@ -495,6 +548,7 @@ def route_after_auth_response(state: AgentState) -> str:
 
 workflow = StateGraph(AgentState)
 
+# Define retry policy for system-level errors
 system_retry_policy = RetryPolicy(
     max_attempts=SYSTEM_RETRIES,
     backoff_factor=1.0,
@@ -552,22 +606,24 @@ workflow.add_conditional_edges(
     "process_question",
     route_after_question,
     {
-        "retry": "ask_question",
-        "next_question": "respond_to_question",
-        "complete": "respond_to_question",
+        "retry": "ask_question",  # Retry same question
+        "next_question": "respond_to_question",  # Move to next
+        "complete": "respond_to_question",  # All done or failed
     },
 )
 workflow.add_conditional_edges(
     "respond_to_question",
     route_after_question_response,
     {
-        "continue": "ask_question",
-        "end": END,
+        "continue": "ask_question",  # Ask next question
+        "end": END,  # All questions complete
     },
 )
 
+# Error handling
 workflow.add_edge("handle_system_error", END)
 
+# Compile
 checkpointer = MemorySaver()
 app = workflow.compile(checkpointer=checkpointer)
 
@@ -602,10 +658,13 @@ def run_conversation():
     print("STARTING CONVERSATION")
     print("=" * 70)
 
+    # Track the last message count to avoid reprinting
     last_message_count = 0
 
+    # Initial run until first interrupt
     for event in app.stream(initial_state, config, stream_mode="values"):
         if "messages" in event and event["messages"]:
+            # Only print new messages
             current_count = len(event["messages"])
             for i in range(last_message_count, current_count):
                 msg = event["messages"][i]
@@ -613,9 +672,11 @@ def run_conversation():
                     print(f"\nAI: {msg.content}")
             last_message_count = current_count
 
+    # Main conversation loop
     while True:
         state = app.get_state(config)
 
+        # Check if conversation ended
         if state.next == ():
             print("\n" + "=" * 70)
             print("CONVERSATION COMPLETE")
@@ -627,6 +688,7 @@ def run_conversation():
                 print(f"DOB: {state.values.get('user_dob')}")
                 print(f"Aadhaar last 4: {state.values.get('user_aadhar_digits')}")
             
+            # Print collected answers
             answers = state.values.get("questions_answers", {})
             if answers:
                 print("\n--- Collected Answers ---")
@@ -635,14 +697,17 @@ def run_conversation():
                     print(f"A: {data['answer']} (confidence: {data['confidence']}%)")
             break
 
+        # Get user input
         user_input = input("\nYou: ").strip()
 
         if not user_input:
             print("Please enter a response.")
             continue
 
+        # Resume with user input
         for event in app.stream(Command(resume=user_input), config, stream_mode="values"):
             if "messages" in event and event["messages"]:
+                # Only print new messages
                 current_count = len(event["messages"])
                 for i in range(last_message_count, current_count):
                     msg = event["messages"][i]
